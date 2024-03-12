@@ -553,10 +553,8 @@ Public Function Items() As Variant()
         Items = Array()
         Exit Function
     End If
-    'Both Redim Preserve come at no cost as no memory is actually deallocated
-    ReDim Preserve m_data.Items(0 To m_data.Count - 1)
     Items = m_data.Items
-    ReDim Preserve m_data.Items(0 To m_data.UBound)
+    ReDim Preserve Items(0 To m_data.UBound)
 End Function
 
 'Change an existing key value
@@ -621,10 +619,8 @@ Public Function Keys() As Variant()
         Keys = Array()
         Exit Function
     End If
-    'Both Redim Preserve come at no cost as no memory is actually deallocated
-    ReDim Preserve m_data.Keys(0 To m_data.Count - 1)
     Keys = m_data.Keys
-    ReDim Preserve m_data.Keys(0 To m_data.UBound)
+    ReDim Preserve Keys(0 To m_data.UBound)
 End Function
 
 'Remove a single item
