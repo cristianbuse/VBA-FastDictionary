@@ -585,7 +585,7 @@ Public Function Items() As Variant()
     End If
     If m_data.UsedCount = m_data.Count Then
         Items = m_data.Items
-        ReDim Preserve Items(0 To m_data.UBound)
+        ReDim Preserve Items(0 To m_data.Count - 1)
     Else
         ReDim res(0 To m_data.UsedCount - 1)
         Dim i As Long
@@ -669,7 +669,7 @@ Public Function Keys() As Variant()
     End If
     If m_data.UsedCount = m_data.Count Then
         Keys = m_data.Keys
-        ReDim Preserve Keys(0 To m_data.UBound)
+        ReDim Preserve Keys(0 To m_data.Count - 1)
     Else
         ReDim res(0 To m_data.UsedCount - 1)
         Dim i As Long
@@ -702,12 +702,14 @@ Public Sub Remove(ByRef Key As Variant)
     '
     i = GetIndex(Key, , groupSlot, , posInGroup)
     If i = NOT_FOUND Then Err.Raise 5, TypeName(Me) & ".Remove"
-    If m_data.UsedCount = 1 Then Init
+    If m_data.UsedCount = 1 Then
+        Init
+        Exit Sub
+    End If
     '
     ClearMapIndex groupSlot, posInGroup
     '
     lastPos = m_data.Count - 1
-    m_data.Count = lastPos
     m_data.UsedCount = m_data.UsedCount - 1
     If i < lastPos Then
         If m_fastUnorderedRemove Then
@@ -743,7 +745,7 @@ Public Sub Remove(ByRef Key As Variant)
             m_data.Items(i) = Empty
             m_data.Keys(i) = Empty
             m_data.Meta(i) = hmRemoved
-            m_data.UsedCount = m_data.UsedCount - 1
+            Exit Sub
         End If
     ElseIf m_data.Count > m_data.UsedCount Then
         i = lastPos - 1
@@ -755,6 +757,7 @@ Public Sub Remove(ByRef Key As Variant)
     'Clear Variants in case deallocation is needed e.g. String/Object
     m_data.Items(lastPos) = Empty
     m_data.Keys(lastPos) = Empty
+    m_data.Count = m_data.Count - 1
 End Sub
 
 Public Sub RemoveAll()
