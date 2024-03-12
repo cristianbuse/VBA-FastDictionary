@@ -53,6 +53,11 @@ Attribute VB_Exposed = False
 ''         - Returns a 1D array of all the Items
 ''    * Keys
 ''         - Returns a 1D array of all the Keys
+''    * PredictCount
+''         - If the number of Key-Item pairs is known before adding or a good
+''           guess is possible then a call to 'PredictCount' with the expected
+''           count will prepare the internal size of the hash map so that there
+''           are no calls made to 'Rehash' thus resulting in  better performance
 ''    * Remove
 ''         - Removes an item by Key
 ''    * RemoveAll
@@ -83,9 +88,9 @@ Attribute VB_Exposed = False
 ''    * Item <Let><Set>
 ''         - Changes the value of an Item identified by the specified Key
 ''         - Default Member. d.Item(Key) = n can be called as d(Key) = n
+''         - If Key does not exist then the pair is added via 'Add'
 ''    * Key <Let>
 ''         - Allows a Key value to be changed while preserving the Item
-''         - If the Key to be replaced does not exist then an error is raised
 ''    * LoadFactor <Get>
 ''         - Returns the current % load for the hash map containing indexes
 ''==============================================================================
@@ -258,8 +263,8 @@ Private m_hasher As Hasher
 Private m_isOrdered As Boolean
 Private m_lookups As Lookups
 
-Private Sub Init()
-    InitHashMap INITIAL_GROUP_COUNT
+Private Sub Init(Optional ByVal newGroupCount As Long = INITIAL_GROUP_COUNT)
+    InitHashMap newGroupCount
     m_data.Count = 0
     m_data.UBound = 0
     m_data.UsedCount = 0
@@ -293,7 +298,7 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
     m_data.Count = m_data.Count + 1
     m_data.UsedCount = m_data.UsedCount + 1
     If m_data.UsedCount > m_hash.MaxLoad Then
-        Rehash
+        Rehash m_hash.GroupCount * 2
         groupSlot = hVal Mod m_hash.GroupCount
         Do While m_hash.Groups(groupSlot).WasEverFull 'Unlikely after rehash
              groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
@@ -319,13 +324,13 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
 End Sub
 
 'Rebuilds hash table using the stored hashes with metadata
-Private Sub Rehash()
+Private Sub Rehash(ByVal newGroupCount As Long)
     Dim hVal As Long
     Dim ctrlByte As Long
     Dim groupSlot As Long
     Dim i As Long
     '
-    InitHashMap m_hash.GroupCount * 2
+    InitHashMap newGroupCount
     For i = 0 To m_data.Count - 1
         hVal = m_data.Meta(i)
         If hVal <> hmRemoved Then
@@ -688,6 +693,24 @@ Public Function Keys() As Variant()
         Keys = res
     End If
 End Function
+
+Public Sub PredictCount(ByVal expectedCount As Long)
+    Const gSizeMult As Double = 1 / GROUP_SIZE
+    Const log2 As Double = 0.693147180559945
+    Const log2Mult As Double = 1 / log2
+    Const maxGroups As Long = HashMeta.[_modHM] / GROUP_SIZE
+    Dim expectedGroups As Long
+    '
+    If expectedCount <= 0 Then Exit Sub
+    expectedGroups = 2 ^ -Int(-Log(expectedCount * gSizeMult) * log2Mult)
+    If expectedGroups > maxGroups Then expectedGroups = maxGroups
+    '
+    If m_hash.GroupCount = 0 Then
+        If expectedGroups > INITIAL_GROUP_COUNT Then Init expectedGroups
+    ElseIf expectedGroups > m_hash.GroupCount * 2 Then
+        Rehash expectedGroups
+    End If
+End Sub
 
 'Remove a single item
 'Raises Error:
