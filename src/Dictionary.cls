@@ -695,14 +695,12 @@ Public Function Keys() As Variant()
 End Function
 
 Public Sub PredictCount(ByVal expectedCount As Long)
-    Const gSizeMult As Double = 1 / GROUP_SIZE
-    Const log2 As Double = 0.693147180559945
-    Const log2Mult As Double = 1 / log2
     Const maxGroups As Long = HashMeta.[_modHM] / GROUP_SIZE
     Dim expectedGroups As Long
     '
     If expectedCount <= 0 Then Exit Sub
-    expectedGroups = 2 ^ -Int(-Log(expectedCount * gSizeMult) * log2Mult)
+    expectedGroups = 2 ^ -Int(-(Log(expectedCount / GROUP_SIZE) _
+                              + Log(1 / MAX_LOAD_FACTOR)) / Log(2))
     If expectedGroups > maxGroups Then expectedGroups = maxGroups
     '
     If m_hash.GroupCount = 0 Then
