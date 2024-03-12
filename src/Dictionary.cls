@@ -280,7 +280,7 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
         Do While m_hash.Groups(groupSlot).WasEverFull 'Unlikely after rehash
              groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
         Loop
-        controlByte = ((hVal And m_hash.ControlMask) \ m_hash.GroupCount)
+        controlByte = (hVal And m_hash.ControlMask) \ m_hash.GroupCount
     End If
     '
     With m_hash.Groups(groupSlot)
@@ -561,11 +561,60 @@ End Function
 
 'Change an existing key value
 'Raises Error:
-'   -   5: invalid oldKey (key is not associated with any element)
-'   - 457: invalid newKey (key is already associated with an element)
-Public Property Let Key(ByRef oldKey As Variant, ByRef NewKey As Variant)
-
+'   -   5: invalid OldKey (key is not associated with any element)
+'   - 457: invalid NewKey (key is already associated with an element)
+Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
+    Dim hVal As Long
+    Dim groupSlot As Long
+    Dim posInGroup As Long
+    Dim controlByte As Long
+    Dim lastPos As Long
+    Dim i As Long
+    '
+    If GetIndex(NewKey, hVal, , controlByte) > NOT_FOUND Then Err.Raise 457
+    i = GetIndex(OldKey, , groupSlot, , posInGroup)
+    If i = NOT_FOUND Then Err.Raise 5, TypeName(Me) & ".Key <Let>"
+    '
+    'Replace Key and Meta while preserving Item
+    If hVal And HashMeta.hmObject Then
+        Set m_data.Keys(i) = NewKey
+    Else
+        m_data.Keys(i) = NewKey
+    End If
+    If m_data.Meta(i) And IS_ITEM_OBJ Then hVal = hVal Or IS_ITEM_OBJ
+    m_data.Meta(i) = hVal
+    '
+    ClearMapIndex groupSlot, posInGroup
+    '
+    'Update hash map with new key
+    groupSlot = hVal Mod m_hash.GroupCount
+    Do While m_hash.Groups(groupSlot).WasEverFull
+         groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
+    Loop
+    With m_hash.Groups(groupSlot)
+        .Index(.Count) = i
+        .Control = .Control Or (controlByte * m_lookups.ByteShiftL(.Count))
+        .Count = .Count + 1
+        .WasEverFull = .WasEverFull Or (.Count = GROUP_SIZE)
+    End With
 End Property
+
+Private Sub ClearMapIndex(ByRef groupSlot As Long, ByRef posInGroup As Long)
+    Dim lastPos As Long
+    '
+    With m_hash.Groups(groupSlot)
+        lastPos = .Count - 1
+        If posInGroup < lastPos Then 'Swap
+            .Index(posInGroup) = .Index(lastPos)
+            .Control = .Control And m_lookups.ByteOff(posInGroup)
+            .Control = .Control Or ((.Control And m_lookups.ByteMask(lastPos)) _
+                                   \ m_lookups.ByteShiftL(lastPos - posInGroup))
+        End If
+        .Index(lastPos) = 0
+        .Control = .Control And m_lookups.ByteOff(lastPos)
+        .Count = .Count - 1
+    End With
+End Sub
 
 Public Function Keys() As Variant()
     If m_data.Count = 0 Then
@@ -592,19 +641,7 @@ Public Sub Remove(ByRef Key As Variant)
     i = GetIndex(Key, , groupSlot, , posInGroup)
     If i = NOT_FOUND Then Err.Raise 5, TypeName(Me) & ".Add"
     '
-    'Clear Index from hash map
-    With m_hash.Groups(groupSlot)
-        lastPos = .Count - 1
-        If posInGroup < lastPos Then 'Swap
-            .Index(posInGroup) = .Index(lastPos)
-            .Control = .Control And m_lookups.ByteOff(posInGroup)
-            .Control = .Control Or ((.Control And m_lookups.ByteMask(lastPos)) _
-                                   \ m_lookups.ByteShiftL(lastPos - posInGroup))
-        End If
-        .Index(lastPos) = 0
-        .Control = .Control And m_lookups.ByteOff(lastPos)
-        .Count = .Count - 1
-    End With
+    ClearMapIndex groupSlot, posInGroup
     '
     lastPos = m_data.Count - 1
     If i < lastPos Then
