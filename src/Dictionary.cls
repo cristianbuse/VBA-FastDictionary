@@ -573,7 +573,7 @@ Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     '
     If GetIndex(NewKey, hVal, , controlByte) > NOT_FOUND Then Err.Raise 457
     i = GetIndex(OldKey, , groupSlot, , posInGroup)
-    If i = NOT_FOUND Then Err.Raise 5, TypeName(Me) & ".Key <Let>"
+    If i = NOT_FOUND Then Err.Raise 5, TypeName(Me) & ".Key", "Key not found"
     '
     'Replace Key and Meta while preserving Item
     If hVal And HashMeta.hmObject Then
@@ -639,7 +639,7 @@ Public Sub Remove(ByRef Key As Variant)
     Dim j As Long
     '
     i = GetIndex(Key, , groupSlot, , posInGroup)
-    If i = NOT_FOUND Then Err.Raise 5, TypeName(Me) & ".Add"
+    If i = NOT_FOUND Then Err.Raise 5, TypeName(Me) & ".Remove"
     '
     ClearMapIndex groupSlot, posInGroup
     '
