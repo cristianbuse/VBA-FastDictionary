@@ -61,10 +61,22 @@ Attribute VB_Exposed = False
 ''         - Self instance - useful in 'With New Dictionary' blocks
 '' Properties:
 ''    * CompareMode <Get/Let>
-''         - Can only be called if there are no stored items:
-''         - Can be: vbBinaryCompare, vbTextCompare or a specific locale ID
+''         - Can only be changed if there are no stored items
+''         - Can be: vbBinaryCompare (Default), vbTextCompare or a locale ID
 ''    * Count <Get>
 ''         - Returns the number of Key-Item pairs
+''    * FastUnorderedRemove <Get/Let>
+''         - Can only be changed if there are no stored items
+''         - If set to 'False' (Default) then calling 'Remove' preserves the
+''           order in which the Key-Item pairs were added but calling 'Items'
+''           and 'Keys' will be slower. If 'Remove' is not called then this
+''           setting has no effect
+''         - If set to 'True' then calling 'Remove' ruins the order in which the
+''           Key-Item pairs were added but calling 'Items' and 'Keys' will be
+''           as fast as copying the entire array in one instruction
+''    * IsOrdered <Get>
+''         - Returns 'False' only if 'FastUnorderedRemove' is set to 'True' and
+''           order was ruined by calling 'Remove'. Otherwise returns 'True'
 ''    * Item <Get>
 ''         - Returns an Item by Key
 ''         - Default Member. Can be omitted: d.Item(Key) can be called as d(Key)
@@ -151,9 +163,11 @@ Private Type DataStorage
     Meta() As Long
     Count As Long
     UBound As Long
+    UsedCount As Long
 End Type
 
 Private Enum HashMeta
+    hmRemoved = 2
     hmError = &H10000000
     hmNumber = &H20000000
     hmText = &H30000000
@@ -241,12 +255,15 @@ Private m_data As DataStorage
 Private m_fastUnorderedRemove As Boolean
 Private m_hash As HashMap
 Private m_hasher As Hasher
+Private m_isOrdered As Boolean
 Private m_lookups As Lookups
 
 Private Sub Init()
     InitHashMap INITIAL_GROUP_COUNT
     m_data.Count = 0
     m_data.UBound = 0
+    m_data.UsedCount = 0
+    m_isOrdered = True
     ReDim m_data.Keys(0 To 0)
     ReDim m_data.Items(0 To 0)
     ReDim m_data.Meta(0 To 0)
@@ -274,7 +291,8 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
     End If
     i = m_data.Count
     m_data.Count = m_data.Count + 1
-    If m_data.Count > m_hash.MaxLoad Then
+    m_data.UsedCount = m_data.UsedCount + 1
+    If m_data.UsedCount > m_hash.MaxLoad Then
         Rehash
         groupSlot = hVal Mod m_hash.GroupCount
         Do While m_hash.Groups(groupSlot).WasEverFull 'Unlikely after rehash
@@ -302,24 +320,27 @@ End Sub
 
 'Rebuilds hash table using the stored hashes with metadata
 Private Sub Rehash()
-    Dim controlByte As Long
+    Dim hVal As Long
+    Dim ctrlByte As Long
     Dim groupSlot As Long
     Dim i As Long
     '
     InitHashMap m_hash.GroupCount * 2
     For i = 0 To m_data.Count - 1
-        groupSlot = m_data.Meta(i) And m_hash.GroupMask
-        Do While m_hash.Groups(groupSlot).WasEverFull 'Unlikely after resize
-            groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
-        Loop
-        With m_hash.Groups(groupSlot)
-            .Index(.Count) = i
-            controlByte = (m_data.Meta(i) And m_hash.ControlMask) _
-                        \ m_hash.GroupCount
-            .Control = .Control Or (controlByte * m_lookups.ByteShiftL(.Count))
-            .Count = .Count + 1
-            .WasEverFull = .WasEverFull Or (.Count = GROUP_SIZE)
-        End With
+        hVal = m_data.Meta(i)
+        If hVal <> hmRemoved Then
+            groupSlot = hVal And m_hash.GroupMask
+            Do While m_hash.Groups(groupSlot).WasEverFull 'Unlikely after resize
+                groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
+            Loop
+            With m_hash.Groups(groupSlot)
+                .Index(.Count) = i
+                ctrlByte = (hVal And m_hash.ControlMask) \ m_hash.GroupCount
+                .Control = .Control Or (ctrlByte * m_lookups.ByteShiftL(.Count))
+                .Count = .Count + 1
+                .WasEverFull = .WasEverFull Or (.Count = GROUP_SIZE)
+            End With
+        End If
     Next i
 End Sub
 Private Sub InitHashMap(ByVal newGroupCount As Long)
@@ -468,6 +489,7 @@ End Function
 
 'Values greater than 2 can be used to compare using specific Locale IDs (LCID)
 'https://learn.microsoft.com/en-us/office/vba/Language/Reference/User-Interface-Help/comparemode-property
+'Can only be changed if there are no stored items
 Public Property Get CompareMode() As VbCompareMethod
     CompareMode = m_compare
 End Property
@@ -475,7 +497,7 @@ Public Property Let CompareMode(ByVal compMode As VbCompareMethod)
     Const minMode As Long = 0
     Const maxMode As Long = 31890 'Same as StrComp limits
     '
-    If m_data.Count > 0 Then
+    If m_data.UsedCount > 0 And compMode <> m_compare Then
         Err.Raise 5, TypeName(Me) & ".CompareMode", "Dict already contains data"
     ElseIf compMode < minMode Or compMode > maxMode Then
         Err.Raise 5, TypeName(Me) & ".CompareMode", "Invalid compare method"
@@ -496,21 +518,29 @@ Public Property Let CompareMode(ByVal compMode As VbCompareMethod)
 End Property
 
 Public Property Get Count() As Long
-    Count = m_data.Count
+    Count = m_data.UsedCount
 End Property
 
+'Can only be changed if there are no stored items
 'When set to True, the order in which the Items/Keys were added via 'Add' is no
 '   longer preserved to facilitate faster 'Remove' calls
 Public Property Get FastUnorderedRemove() As Boolean
     FastUnorderedRemove = m_fastUnorderedRemove
 End Property
 Public Property Let FastUnorderedRemove(ByVal fastOn As Boolean)
+    If m_data.UsedCount > 0 And fastOn <> m_fastUnorderedRemove Then
+        Err.Raise 5, TypeName(Me) & ".CompareMode", "Dict already contains data"
+    End If
     m_fastUnorderedRemove = fastOn
 End Property
 
 Public Function Exists(ByRef Key As Variant) As Boolean
     Exists = (GetIndex(Key) > NOT_FOUND)
 End Function
+
+Public Property Get IsOrdered() As Boolean
+    IsOrdered = m_isOrdered
+End Property
 
 'Raises Error:
 '   -    5: invalid key (key is not associated with any element)
@@ -549,12 +579,30 @@ Public Property Set Item(ByRef Key As Variant, ByRef Item As Object)
 End Property
 
 Public Function Items() As Variant()
-    If m_data.Count = 0 Then
+    If m_data.UsedCount = 0 Then
         Items = Array()
         Exit Function
     End If
-    Items = m_data.Items
-    ReDim Preserve Items(0 To m_data.UBound)
+    If m_data.UsedCount = m_data.Count Then
+        Items = m_data.Items
+        ReDim Preserve Items(0 To m_data.UBound)
+    Else
+        ReDim res(0 To m_data.UsedCount - 1)
+        Dim i As Long
+        Dim j As Long
+        '
+        For i = 0 To m_data.Count - 1
+            If m_data.Meta(i) <> hmRemoved Then
+                If m_data.Meta(i) And IS_ITEM_OBJ Then
+                    Set res(j) = m_data.Items(i)
+                Else
+                    res(j) = m_data.Items(i)
+                End If
+                j = j + 1
+            End If
+        Next i
+        Items = res
+    End If
 End Function
 
 'Change an existing key value
@@ -615,12 +663,30 @@ Private Sub ClearMapIndex(ByRef groupSlot As Long, ByRef posInGroup As Long)
 End Sub
 
 Public Function Keys() As Variant()
-    If m_data.Count = 0 Then
+    If m_data.UsedCount = 0 Then
         Keys = Array()
         Exit Function
     End If
-    Keys = m_data.Keys
-    ReDim Preserve Keys(0 To m_data.UBound)
+    If m_data.UsedCount = m_data.Count Then
+        Keys = m_data.Keys
+        ReDim Preserve Keys(0 To m_data.UBound)
+    Else
+        ReDim res(0 To m_data.UsedCount - 1)
+        Dim i As Long
+        Dim j As Long
+        '
+        For i = 0 To m_data.Count - 1
+            If m_data.Meta(i) <> hmRemoved Then
+                If m_data.Meta(i) And hmObject Then
+                    Set res(j) = m_data.Keys(i)
+                Else
+                    res(j) = m_data.Keys(i)
+                End If
+                j = j + 1
+            End If
+        Next i
+        Keys = res
+    End If
 End Function
 
 'Remove a single item
@@ -636,12 +702,16 @@ Public Sub Remove(ByRef Key As Variant)
     '
     i = GetIndex(Key, , groupSlot, , posInGroup)
     If i = NOT_FOUND Then Err.Raise 5, TypeName(Me) & ".Remove"
+    If m_data.UsedCount = 1 Then Init
     '
     ClearMapIndex groupSlot, posInGroup
     '
     lastPos = m_data.Count - 1
+    m_data.Count = lastPos
+    m_data.UsedCount = m_data.UsedCount - 1
     If i < lastPos Then
         If m_fastUnorderedRemove Then
+            m_isOrdered = False
             'Swap data
             hVal = m_data.Meta(lastPos)
             If hVal And IS_ITEM_OBJ Then
@@ -669,23 +739,22 @@ Public Sub Remove(ByRef Key As Variant)
                 End With
                 groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
             Loop
-        Else
-            'Shift data
+        Else 'Clear data and register removal
             m_data.Items(i) = Empty
             m_data.Keys(i) = Empty
-            m_data.Meta(i) = 0
-            '
-            Stop
-            'More functionality to be implemented here
-            '
-            '
-            '
+            m_data.Meta(i) = hmRemoved
+            m_data.UsedCount = m_data.UsedCount - 1
         End If
+    ElseIf m_data.Count > m_data.UsedCount Then
+        i = lastPos - 1
+        Do While m_data.Meta(i) = hmRemoved
+            m_data.Count = m_data.Count - 1
+            i = i - 1 'Cannot go out of bounds due to previous check
+        Loop
     End If
+    'Clear Variants in case deallocation is needed e.g. String/Object
     m_data.Items(lastPos) = Empty
     m_data.Keys(lastPos) = Empty
-    m_data.Meta(lastPos) = 0
-    m_data.Count = m_data.Count - 1
 End Sub
 
 Public Sub RemoveAll()
@@ -699,7 +768,7 @@ End Function
 
 'Returns the current % load for the hash map containing indexes
 Public Property Get LoadFactor() As Single
-    LoadFactor = m_data.Count / (m_hash.GroupCount * GROUP_SIZE)
+    LoadFactor = m_data.UsedCount / (m_hash.GroupCount * GROUP_SIZE)
 End Property
 
 Private Sub InitLookups()
