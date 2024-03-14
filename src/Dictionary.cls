@@ -225,7 +225,7 @@ End Type
 'Minimal version of MEMORY_ACCESOR:
 'https://github.com/cristianbuse/VBA-MemoryTools
 Private Type MemoryAccessor
-    ic As IntegerAccesor
+    ia As IntegerAccesor
     sa As SAFEARRAY_1D
 End Type
 
@@ -402,7 +402,7 @@ Private Function GetIndex(ByRef Key As Variant _
                     m_hasher.ma.sa.pvData = StrPtr(s)
                 End If
 #End If
-                With m_hasher.ma.ic
+                With m_hasher.ma.ia
                     Dim i As Long
                     For i = 0 To m_hasher.ma.sa.rgsabound0.cElements - 1
                         hVal = (hVal And tOverflowMask) * tPrime + .ints(i)
@@ -440,7 +440,7 @@ Private Function GetIndex(ByRef Key As Variant _
         End If
         'Prime 13 is low enough that there is no need to mask for overflow
         Const n1& = 13 ^ 1, n2& = 13 ^ 2, n3& = 13 ^ 3, n4& = 13 ^ 4
-        With m_hasher.ma.ic
+        With m_hasher.ma.ia
             hVal = (.ints(0) * n4 + .ints(1) * n3 _
                   + .ints(2) * n2 + .ints(3) * n1) And HashMeta.[_maskHM] Or m
         End With
@@ -840,7 +840,7 @@ Private Sub InitLocalHasher()
         .dictInstance.refCount = 10 'Larger than 2 to avoid deallocation
         Dictionary.InitHasher .dictInstance.vTables _
                             , .textHasher, .dictInstance.localeID _
-                            , VarPtr(.ma.ic), VarPtr(.ma.sa)
+                            , VarPtr(.ma.ia), VarPtr(.ma.sa)
         .lcid = .dictInstance.localeID
     End With
     CompareMode = m_compare
