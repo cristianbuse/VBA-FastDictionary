@@ -838,10 +838,7 @@ Private Sub InitLocalHasher()
     With m_hasher
         .dictInstance.hashModulo = HashMeta.[_modHM]
         .dictInstance.refCount = 10 'Larger than 2 to avoid deallocation
-        Dictionary.InitHasher .dictInstance.vTables _
-                            , .textHasher, .dictInstance.localeID _
-                            , VarPtr(.ma.ia), VarPtr(.ma.sa)
-        .lcid = .dictInstance.localeID
+        Dictionary.InitHasher m_hasher
     End With
     CompareMode = m_compare
 #End If
@@ -869,14 +866,8 @@ End Sub
 '   memory manipulation
 'The best alternative was to use a standard .bas module like 'LibMemory' at:
 '   https://github.com/cristianbuse/VBA-MemoryTools
-'Cannot have public defined types in a class so we cannot have type arguments
-'   in a Public method. Smaller components and pointers are passed instead
 #If Mac = 0 Then
-Public Sub InitHasher(ByRef allVTables() As LongPtr _
-                    , ByRef fakeDict As Collection _
-                    , ByRef lcid As Long _
-                    , ByRef intsPtr As LongPtr _
-                    , ByRef saPtr As LongPtr)
+Friend Sub InitHasher(ByRef h As Hasher)
     Const dictVTableSize As Long = 22
     Const opNumDictHashVal As Long = 21
     Const opNumCollItem As Long = 7
@@ -925,16 +916,17 @@ Public Sub InitHasher(ByRef allVTables() As LongPtr _
     '
     'Create fake instance while avoiding calls to CopyMemory (slow in Win VBA7)
     'We need all 4 virtual tables to prevent crashes if debugging
-    allVTables(0) = fakeVTables(0)
-    allVTables(1) = fakeVTables(1)
-    allVTables(2) = fakeVTables(2)
-    allVTables(3) = fakeVTables(3)
-    lcid = dictLcid
-    sa.pvData = VarPtr(fakeDict)
-    pa.ptrs(0) = VarPtr(allVTables(0))
-    '
+    h.dictInstance.vTables(0) = fakeVTables(0)
+    h.dictInstance.vTables(1) = fakeVTables(1)
+    h.dictInstance.vTables(2) = fakeVTables(2)
+    h.dictInstance.vTables(3) = fakeVTables(3)
+    h.dictInstance.localeID = dictLcid
+    sa.pvData = VarPtr(h.textHasher)
+    pa.ptrs(0) = VarPtr(h.dictInstance.vTables(0))
+    h.lcid = dictLcid
+        '
     'Init integer accesor
-    sa.pvData = intsPtr
-    pa.ptrs(0) = saPtr
+    sa.pvData = VarPtr(h.ma.ia)
+    pa.ptrs(0) = VarPtr(h.ma.sa)
 End Sub
 #End If
