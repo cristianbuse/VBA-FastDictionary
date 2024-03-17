@@ -49,6 +49,8 @@ Attribute VB_Exposed = False
 ''         - Keys are any data type except Arrays and User-Defined Types (UDTs)
 ''    * Exists
 ''         - Checks if a specified Key exists
+''    * Factory
+''         - Returns a new Dictionary instance
 ''    * Items
 ''         - Returns a 1D array of all the Items
 ''    * Keys
@@ -930,3 +932,7 @@ Friend Sub InitHasher(ByRef h As Hasher)
     pa.ptrs(0) = VarPtr(h.ma.sa)
 End Sub
 #End If
+
+Public Function Factory() As Dictionary
+    Set Factory = New Dictionary
+End Function
