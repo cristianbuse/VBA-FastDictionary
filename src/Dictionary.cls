@@ -231,14 +231,21 @@ Private Type MemoryAccessor
     sa As SAFEARRAY_1D
 End Type
 
+Private Enum CLPosition
+    posComp = 0
+    posLcid = 1
+End Enum
+
 Private Type Hasher
 #If Mac = 0 Then
-    dictInstance As ScrDictLayout
-    textHasher As Collection
+    textHasher() As Collection
+    compLcid() As Long
     lcid As Long
+    cachedLcid As Long 'To avoid 'If' statement for mode >= vbTextCompare
+    defInstance As Dictionary
 #End If
-    ma As MemoryAccessor
     isSet As Boolean
+    ma As MemoryAccessor
     d As Double 'For hashing numbers
     dPtr As LongPtr
 End Type
@@ -392,7 +399,8 @@ Private Function GetIndex(ByRef Key As Variant _
         If m_compare = vbBinaryCompare Then
             m_hasher.ma.sa.rgsabound0.cElements = Len(Key)
             If minLenBinary < m_hasher.ma.sa.rgsabound0.cElements Then
-                hVal = m_hasher.textHasher(Key) Or hmText 'Early-bind speed
+                m_hasher.compLcid(posComp) = vbBinaryCompare
+                hVal = m_hasher.textHasher(0).Item(Key) Or hmText 'Early-binded
             Else 'Faster to loop integers
                 m_hasher.ma.sa.pvData = StrPtr(Key)
 #Else
@@ -416,7 +424,9 @@ Private Function GetIndex(ByRef Key As Variant _
 #If Mac = 0 Then
             End If
         Else
-            hVal = m_hasher.textHasher(Key) Or hmText 'Early-binding speed
+            m_hasher.compLcid(posComp) = vbTextCompare
+            m_hasher.compLcid(posLcid) = m_hasher.cachedLcid
+            hVal = m_hasher.textHasher(0).Item(Key) Or hmText 'Early-binded
         End If
 #End If
     ElseIf vt = vbObject Or vt = vbDataObject Then
@@ -510,17 +520,12 @@ Public Property Let CompareMode(ByVal compMode As VbCompareMethod)
         Err.Raise 5, TypeName(Me) & ".CompareMode", "Invalid compare method"
     End If
     m_compare = compMode
-    '
 #If Mac = 0 Then
-    With m_hasher.dictInstance
-        If m_compare > vbTextCompare Then
-            .compMode = vbTextCompare
-            .localeID = m_compare
-        Else
-            .compMode = m_compare
-            .localeID = m_hasher.lcid
-        End If
-    End With
+    If m_compare > vbTextCompare Then
+        m_hasher.cachedLcid = m_compare
+    Else
+        m_hasher.cachedLcid = m_hasher.lcid
+    End If
 #End If
 End Property
 
@@ -837,11 +842,7 @@ Private Sub InitLocalHasher()
 #If Mac Then
     CopyMemory ByVal VarPtr(m_hasher.ma.ic), VarPtr(m_hasher.ma.sa), PTR_SIZE
 #Else
-    With m_hasher
-        .dictInstance.hashModulo = HashMeta.[_modHM]
-        .dictInstance.refCount = 10 'Larger than 2 to avoid deallocation
-        Dictionary.InitHasher m_hasher
-    End With
+    Dictionary.InitHasher m_hasher
     CompareMode = m_compare
 #End If
     With m_hasher
@@ -870,21 +871,25 @@ End Sub
 '   https://github.com/cristianbuse/VBA-MemoryTools
 #If Mac = 0 Then
 Friend Sub InitHasher(ByRef h As Hasher)
-    Const dictVTableSize As Long = 22
+    Const dictVTables As Long = 4
+    Const dictMainVTableSize As Long = 22
     Const opNumDictHashVal As Long = 21
     Const opNumCollItem As Long = 7
-    Static vTable(0 To dictVTableSize - 1) As LongPtr
-    Static fakeVTables(0 To 3) As LongPtr
-    Static dictLcid As Long
+    Static fakeDict As Collection
+    Static mainVTable(0 To dictMainVTableSize - 1) As LongPtr
+    Static sdl As ScrDictLayout
+    Static lcid As Long
     Static isSet As Boolean
-    Static sa As SAFEARRAY_1D
+    Static saPtr As SAFEARRAY_1D
+    Static saCL As SAFEARRAY_1D
+    Static saF As SAFEARRAY_1D
     Static pa As PointerAccesor
     '
     If Not Me Is Dictionary Then Exit Sub
     If Not isSet Then
         'Init pointer accessor
-        InitSafeArray sa, PTR_SIZE
-        CopyMemory ByVal VarPtr(pa), VarPtr(sa), PTR_SIZE 'The only API call
+        InitSafeArray saPtr, PTR_SIZE
+        CopyMemory ByVal VarPtr(pa), VarPtr(saPtr), PTR_SIZE 'The only API call
         '
         'Early bind a Collection interface to a fake Scripting.Dictionary
         '   where Collection.Item is mapped to Dictionary.HashVal. This allows
@@ -894,41 +899,59 @@ Friend Sub InitHasher(ByRef h As Hasher)
         Dim i As Long
         '
         'Copy Scripting.Dictionary virtual table addresses
-        sa.pvData = ObjPtr(temp)
-        sa.rgsabound0.cElements = dictVTableSize
-        For i = 0 To 3
-            fakeVTables(i) = pa.ptrs(i)
+        saPtr.pvData = ObjPtr(temp)
+        saPtr.rgsabound0.cElements = dictMainVTableSize
+        For i = 0 To dictVTables - 1
+            sdl.vTables(i) = pa.ptrs(i)
         Next i
         '
         'Copy locale ID
-        dictLcid = CLng(pa.ptrs(10))
+        lcid = CLng(pa.ptrs(10))
         Set temp = Nothing 'Actual dictionary not needed anymore
+        sdl.localeID = lcid
         '
         'Copy entire main virtual function table to our own
-        sa.pvData = fakeVTables(0)
-        For i = 0 To dictVTableSize - 1
-            vTable(i) = pa.ptrs(i)
+        saPtr.pvData = sdl.vTables(0)
+        For i = 0 To dictMainVTableSize - 1
+            mainVTable(i) = pa.ptrs(i)
         Next i
-        fakeVTables(0) = VarPtr(vTable(0)) 'Replace main vTable
+        sdl.vTables(0) = VarPtr(mainVTable(0)) 'Replace main vTable
         '
-        vTable(opNumCollItem) = vTable(opNumDictHashVal) 'Map Item to HashVal
-        sa.rgsabound0.cElements = 1
+        'Map Collection.Item to Dictionary.HashVal
+        mainVTable(opNumCollItem) = mainVTable(opNumDictHashVal)
+        '
+        'Set up fake instance
+        sdl.hashModulo = HashMeta.[_modHM]
+        sdl.refCount = 2 'To avoid deallocation
+        saPtr.rgsabound0.cElements = 1
+        saPtr.pvData = VarPtr(fakeDict)
+        pa.ptrs(0) = VarPtr(sdl)
+        '
+        'Init safe array for comp/lcid
+        Const LONG_SIZE As Long = 4
+        InitSafeArray saCL, LONG_SIZE
+        saCL.pvData = VarPtr(sdl.compMode)
+        saCL.rgsabound0.cElements = 2
+        '
+        'Init safe array for collection
+        InitSafeArray saF, PTR_SIZE
+        saF.pvData = VarPtr(fakeDict)
+        saF.rgsabound0.cElements = 1
+        '
         isSet = True
     End If
     '
-    'Create fake instance while avoiding calls to CopyMemory (slow in Win VBA7)
-    'We need all 4 virtual tables to prevent crashes if debugging
-    h.dictInstance.vTables(0) = fakeVTables(0)
-    h.dictInstance.vTables(1) = fakeVTables(1)
-    h.dictInstance.vTables(2) = fakeVTables(2)
-    h.dictInstance.vTables(3) = fakeVTables(3)
-    h.dictInstance.localeID = dictLcid
-    sa.pvData = VarPtr(h.textHasher)
-    pa.ptrs(0) = VarPtr(h.dictInstance.vTables(0))
-    h.lcid = dictLcid
-        '
+    h.lcid = lcid
+    Set h.defInstance = Me 'Avoid deallocation of this instance
+    saPtr.pvData = VarPtr(h)
+    pa.ptrs(0) = VarPtr(saF)
+    
+    'Init compMode and lcid accesor
+    saPtr.pvData = saPtr.pvData + PTR_SIZE
+    pa.ptrs(0) = VarPtr(saCL)
+    '
     'Init integer accesor
-    sa.pvData = VarPtr(h.ma.ia)
+    saPtr.pvData = VarPtr(h.ma.ia)
     pa.ptrs(0) = VarPtr(h.ma.sa)
 End Sub
 #End If
