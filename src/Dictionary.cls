@@ -37,12 +37,9 @@ Attribute VB_Exposed = False
 
 ''==============================================================================
 '' Description:
-''    * Windows:
-''         - Scripting.Dictionary replacement
-''         - Performant when dealing with many Items
-''         - Performant when dealing with large String Keys or Object Keys
-''    * Mac:
-''         - Supported
+''    * Scripting.Dictionary replacement for Windows
+''    * Mac OS compatible
+''    * Performant when dealing with many Items, large String or Object Keys
 '' Methods:
 ''    * Add
 ''         - Adds a new Key-Item pair
@@ -126,8 +123,8 @@ Const INITIAL_GROUP_COUNT As Long = 16
 #If Win64 Then
     Const PTR_SIZE As Long = 8
     Const SIGN_BIT As LongLong = &H8000000000000000^
-    Const HIGH_BIT_OFF As LongLong = &H7F7F7F7F7F7F7F7F^  'Per Byte
-    Const HIGH_BIT_ONLY As LongLong = &H8080808080808080^ 'Per Byte
+    Const HIGH_BIT_OFF As LongLong = &H7F7F7F7F7F7F7F7F^  'Bit Off Per Each Byte
+    Const HIGH_BIT_ONLY As LongLong = &H8080808080808080^
     Const BYTE_BROADCAST As LongLong = &H101010101010101^
     Const POSITION_PRIME As LongLong = 19
 #Else
@@ -138,7 +135,7 @@ Const INITIAL_GROUP_COUNT As Long = 16
     Const BYTE_BROADCAST As Long = &H1010101
     Const POSITION_PRIME As Long = 7
 #End If
-#If Win64 = 0 Or Mac Then
+#If (Win64 = 0) Or Mac Then
     Const vbLongLong = 20
 #End If
 
@@ -236,13 +233,15 @@ Private Enum CLPosition
     posLcid = 1
 End Enum
 
+'Both 'textHasher' and 'compLcid' will link into the default (Predeclared)
+'   instance of this class. This is necessary to avoid speed issues on the heap
 Private Type Hasher
 #If Mac = 0 Then
     textHasher() As Collection
-    compLcid() As Long
-    lcid As Long
+    compLcid() As Long 'Will use CLPosition Enum to distinguish index
+    lcid As Long       'System localeID
     cachedLcid As Long 'To avoid 'If' statement for mode >= vbTextCompare
-    defInstance As Dictionary
+    defInstance As Dictionary 'Avoids deallocation of default (Predeclared) dict
 #End If
     isSet As Boolean
     ma As MemoryAccessor
@@ -385,7 +384,8 @@ Private Function GetIndex(ByRef Key As Variant _
                         , Optional ByRef hVal As Long _
                         , Optional ByRef groupSlot As Long _
                         , Optional ByRef controlByte As Long _
-                        , Optional ByRef posInGroup As Long) As Long
+                        , Optional ByRef posInGroup As Long _
+                        , Optional ByVal hashOnly As Boolean = False) As Long
     If m_hash.GroupCount = 0 Then Init
     Dim vt As VbVarType
     '
@@ -459,6 +459,7 @@ Private Function GetIndex(ByRef Key As Variant _
     Else
         hVal = vt 'vbEmpty (0) or vbNull (1)
     End If
+    If hashOnly Then Exit Function
     '
     'Calculate sub-hashes
     groupSlot = hVal Mod m_hash.GroupCount
@@ -959,3 +960,7 @@ End Sub
 Public Function Factory() As Dictionary
     Set Factory = New Dictionary
 End Function
+
+Public Property Get HashVal(ByRef Key As Variant) As Long
+    GetIndex Key, HashVal, hashOnly:=True
+End Property
