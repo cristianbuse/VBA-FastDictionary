@@ -199,15 +199,6 @@ Private Type ScrDictLayout 'Scripting.Dictionary memory layout
 End Type
 #End If
 
-Private Type IntegerAccesor
-    ints() As Integer
-End Type
-#If Mac = 0 Then
-    Private Type PointerAccesor
-        ptrs() As LongPtr
-    End Type
-#End If
-
 Private Type SAFEARRAYBOUND
     cElements As Long
     lLbound As Long
@@ -221,12 +212,18 @@ Private Type SAFEARRAY_1D
     rgsabound0 As SAFEARRAYBOUND
 End Type
 
-'Minimal version of MEMORY_ACCESOR:
+'Minimal version of MEMORY_ACCESSOR:
 'https://github.com/cristianbuse/VBA-MemoryTools
-Private Type MemoryAccessor
-    ia As IntegerAccesor
+Private Type IntegerAccessor
+    ints() As Integer
     sa As SAFEARRAY_1D
 End Type
+#If Mac = 0 Then
+    Private Type PointerAccessor
+        ptrs() As LongPtr
+        sa As SAFEARRAY_1D
+    End Type
+#End If
 
 Private Enum CLPosition
     posComp = 0
@@ -244,7 +241,7 @@ Private Type Hasher
     defInstance As Dictionary 'Avoids deallocation of default (Predeclared) dict
 #End If
     isSet As Boolean
-    ma As MemoryAccessor
+    ia As IntegerAccessor
     d As Double 'For hashing numbers
     dPtr As LongPtr
 End Type
@@ -397,12 +394,12 @@ Private Function GetIndex(ByRef Key As Variant _
 #If Mac = 0 Then
         Const minLenBinary As Long = 6
         If m_compare = vbBinaryCompare Then
-            m_hasher.ma.sa.rgsabound0.cElements = Len(Key)
-            If minLenBinary < m_hasher.ma.sa.rgsabound0.cElements Then
+            m_hasher.ia.sa.rgsabound0.cElements = Len(Key)
+            If minLenBinary < m_hasher.ia.sa.rgsabound0.cElements Then
                 m_hasher.compLcid(posComp) = vbBinaryCompare
                 hVal = m_hasher.textHasher(0).Item(Key) Or hmText 'Early-binded
             Else 'Faster to loop integers
-                m_hasher.ma.sa.pvData = StrPtr(Key)
+                m_hasher.ia.sa.pvData = StrPtr(Key)
 #Else
                 m_hasher.ma.sa.rgsabound0.cElements = Len(Key)
                 If m_compare = vbBinaryCompare Then
@@ -412,15 +409,15 @@ Private Function GetIndex(ByRef Key As Variant _
                     m_hasher.ma.sa.pvData = StrPtr(s)
                 End If
 #End If
-                With m_hasher.ma.ia
+                With m_hasher.ia
                     Dim i As Long
-                    For i = 0 To m_hasher.ma.sa.rgsabound0.cElements - 1
+                    For i = 0 To m_hasher.ia.sa.rgsabound0.cElements - 1
                         hVal = (hVal And tOverflowMask) * tPrime + .ints(i)
                     Next i
                 End With
                 hVal = hVal And [_maskHM] Or hmText
-                m_hasher.ma.sa.rgsabound0.cElements = INTS_IN_DOUBLE
-                m_hasher.ma.sa.pvData = m_hasher.dPtr
+                m_hasher.ia.sa.rgsabound0.cElements = INTS_IN_DOUBLE
+                m_hasher.ia.sa.pvData = m_hasher.dPtr
 #If Mac = 0 Then
             End If
         Else
@@ -452,7 +449,7 @@ Private Function GetIndex(ByRef Key As Variant _
         End If
         'Prime 13 is low enough that there is no need to mask for overflow
         Const n1& = 13 ^ 1, n2& = 13 ^ 2, n3& = 13 ^ 3, n4& = 13 ^ 4
-        With m_hasher.ma.ia
+        With m_hasher.ia
             hVal = (.ints(0) * n4 + .ints(1) * n3 _
                   + .ints(2) * n2 + .ints(3) * n1) And HashMeta.[_maskHM] Or m
         End With
@@ -839,7 +836,7 @@ End Sub
 '   binding speed (Win only)
 Private Sub InitLocalHasher()
     Const INT_SIZE As Long = 2
-    InitSafeArray m_hasher.ma.sa, INT_SIZE
+    InitSafeArray m_hasher.ia.sa, INT_SIZE
 #If Mac Then
     CopyMemory ByVal VarPtr(m_hasher.ma.ic), VarPtr(m_hasher.ma.sa), PTR_SIZE
 #Else
@@ -848,8 +845,8 @@ Private Sub InitLocalHasher()
 #End If
     With m_hasher
         .dPtr = VarPtr(.d)
-        .ma.sa.pvData = .dPtr
-        .ma.sa.rgsabound0.cElements = INTS_IN_DOUBLE
+        .ia.sa.pvData = .dPtr
+        .ia.sa.rgsabound0.cElements = INTS_IN_DOUBLE
         .isSet = True
     End With
 End Sub
@@ -881,16 +878,15 @@ Friend Sub InitHasher(ByRef h As Hasher)
     Static sdl As ScrDictLayout
     Static lcid As Long
     Static isSet As Boolean
-    Static saPtr As SAFEARRAY_1D
     Static saCL As SAFEARRAY_1D
     Static saF As SAFEARRAY_1D
-    Static pa As PointerAccesor
+    Static pa As PointerAccessor
     '
     If Not Me Is Dictionary Then Exit Sub
     If Not isSet Then
         'Init pointer accessor
-        InitSafeArray saPtr, PTR_SIZE
-        CopyMemory ByVal VarPtr(pa), VarPtr(saPtr), PTR_SIZE 'The only API call
+        InitSafeArray pa.sa, PTR_SIZE
+        CopyMemory ByVal VarPtr(pa), VarPtr(pa.sa), PTR_SIZE 'The only API call
         '
         'Early bind a Collection interface to a fake Scripting.Dictionary
         '   where Collection.Item is mapped to Dictionary.HashVal. This allows
@@ -900,8 +896,8 @@ Friend Sub InitHasher(ByRef h As Hasher)
         Dim i As Long
         '
         'Copy Scripting.Dictionary virtual table addresses
-        saPtr.pvData = ObjPtr(temp)
-        saPtr.rgsabound0.cElements = dictMainVTableSize
+        pa.sa.pvData = ObjPtr(temp)
+        pa.sa.rgsabound0.cElements = dictMainVTableSize
         For i = 0 To dictVTables - 1
             sdl.vTables(i) = pa.ptrs(i)
         Next i
@@ -912,7 +908,7 @@ Friend Sub InitHasher(ByRef h As Hasher)
         sdl.localeID = lcid
         '
         'Copy entire main virtual function table to our own
-        saPtr.pvData = sdl.vTables(0)
+        pa.sa.pvData = sdl.vTables(0)
         For i = 0 To dictMainVTableSize - 1
             mainVTable(i) = pa.ptrs(i)
         Next i
@@ -924,8 +920,8 @@ Friend Sub InitHasher(ByRef h As Hasher)
         'Set up fake instance
         sdl.hashModulo = HashMeta.[_modHM]
         sdl.refCount = 2 'To avoid deallocation
-        saPtr.rgsabound0.cElements = 1
-        saPtr.pvData = VarPtr(fakeDict)
+        pa.sa.rgsabound0.cElements = 1
+        pa.sa.pvData = VarPtr(fakeDict)
         pa.ptrs(0) = VarPtr(sdl)
         '
         'Init safe array for comp/lcid
@@ -944,16 +940,16 @@ Friend Sub InitHasher(ByRef h As Hasher)
     '
     h.lcid = lcid
     Set h.defInstance = Me 'Avoid deallocation of this instance
-    saPtr.pvData = VarPtr(h)
+    pa.sa.pvData = VarPtr(h)
     pa.ptrs(0) = VarPtr(saF)
     
     'Init compMode and lcid accesor
-    saPtr.pvData = saPtr.pvData + PTR_SIZE
+    pa.sa.pvData = pa.sa.pvData + PTR_SIZE
     pa.ptrs(0) = VarPtr(saCL)
     '
     'Init integer accesor
-    saPtr.pvData = VarPtr(h.ma.ia)
-    pa.ptrs(0) = VarPtr(h.ma.sa)
+    pa.sa.pvData = VarPtr(h.ia)
+    pa.ptrs(0) = VarPtr(h.ia.sa)
 End Sub
 #End If
 
