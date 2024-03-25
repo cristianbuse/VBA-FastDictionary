@@ -121,6 +121,7 @@ Const MAX_LOAD_FACTOR As Single = 0.5
 Const INITIAL_GROUP_COUNT As Long = 16
 
 #If Win64 Then
+    Const NULL_PTR As LongLong = 0^
     Const PTR_SIZE As Long = 8
     Const SIGN_BIT As LongLong = &H8000000000000000^
     Const HIGH_BIT_OFF As LongLong = &H7F7F7F7F7F7F7F7F^  'Bit Off Per Each Byte
@@ -128,6 +129,7 @@ Const INITIAL_GROUP_COUNT As Long = 16
     Const BYTE_BROADCAST As LongLong = &H101010101010101^
     Const POSITION_PRIME As LongLong = 19
 #Else
+    Const NULL_PTR As Long = 0&
     Const PTR_SIZE As Long = 4
     Const SIGN_BIT As Long = &H80000000
     Const HIGH_BIT_OFF As Long = &H7F7F7F7F
@@ -161,10 +163,23 @@ Private Type HashMap
     ControlMask As Long
 End Type
 
+#If Win64 = 0 Then
+Private Type EnumerableVariant
+    Value As Variant
+    Meta As Long
+    Dummy As Long
+    NextPtr As Long
+End Type
+#End If
+
 Private Type DataStorage
-    Keys() As Variant
     Items() As Variant
+#If Win64 Then
+    Keys() As Variant
     Meta() As Long
+#Else
+    Keys() As EnumerableVariant
+#End If
     Count As Long
     UBound As Long
     UsedCount As Long
@@ -188,7 +203,7 @@ Private Type ScrDictLayout 'Scripting.Dictionary memory layout
     firstItemPtr As LongPtr
     lastItemPtr As LongPtr
 #If Win64 = 0 Then
-    dummy As Long
+    Dummy As Long
 #End If
     hashTablePtr As LongPtr
     hashModulo As Long
@@ -218,12 +233,11 @@ Private Type IntegerAccessor
     ints() As Integer
     sa As SAFEARRAY_1D
 End Type
-#If Mac = 0 Then
-    Private Type PointerAccessor
-        ptrs() As LongPtr
-        sa As SAFEARRAY_1D
-    End Type
-#End If
+Private Type PointerAccessor
+    ptrs() As LongPtr
+    sa As SAFEARRAY_1D
+    isSet As Boolean
+End Type
 
 Private Enum CLPosition
     posComp = 0
@@ -295,9 +309,13 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
     '
     If m_data.Count > m_data.UBound Then
         m_data.UBound = m_data.UBound * 2 + 1
-        ReDim Preserve m_data.Keys(0 To m_data.UBound)
         ReDim Preserve m_data.Items(0 To m_data.UBound)
-        ReDim Preserve m_data.Meta(0 To m_data.UBound)
+        #If Win64 Then 'Extra member for safe IEnumVariant
+            ReDim Preserve m_data.Keys(0 To m_data.UBound + 1)
+            ReDim Preserve m_data.Meta(0 To m_data.UBound)
+        #Else
+            ReDim Preserve m_data.Keys(0 To m_data.UBound)
+        #End If
     End If
     i = m_data.Count
     m_data.Count = m_data.Count + 1
@@ -877,16 +895,13 @@ Friend Sub InitHasher(ByRef h As Hasher)
     Static mainVTable(0 To dictMainVTableSize - 1) As LongPtr
     Static sdl As ScrDictLayout
     Static lcid As Long
-    Static isSet As Boolean
     Static saCL As SAFEARRAY_1D
     Static saF As SAFEARRAY_1D
     Static pa As PointerAccessor
     '
     If Not Me Is Dictionary Then Exit Sub
-    If Not isSet Then
-        'Init pointer accessor
-        InitSafeArray pa.sa, PTR_SIZE
-        CopyMemory ByVal VarPtr(pa), VarPtr(pa.sa), PTR_SIZE 'The only API call
+    If Not pa.isSet Then
+        InitPointerAccessor pa
         '
         'Early bind a Collection interface to a fake Scripting.Dictionary
         '   where Collection.Item is mapped to Dictionary.HashVal. This allows
@@ -934,15 +949,13 @@ Friend Sub InitHasher(ByRef h As Hasher)
         InitSafeArray saF, PTR_SIZE
         saF.pvData = VarPtr(fakeDict)
         saF.rgsabound0.cElements = 1
-        '
-        isSet = True
     End If
     '
     h.lcid = lcid
     Set h.defInstance = Me 'Avoid deallocation of this instance
     pa.sa.pvData = VarPtr(h)
     pa.ptrs(0) = VarPtr(saF)
-    
+    '
     'Init compMode and lcid accesor
     pa.sa.pvData = pa.sa.pvData + PTR_SIZE
     pa.ptrs(0) = VarPtr(saCL)
@@ -953,6 +966,23 @@ Friend Sub InitHasher(ByRef h As Hasher)
 End Sub
 #End If
 
+Friend Sub InitPointerAccessor(ByRef paToInit As PointerAccessor)
+    Static pa As PointerAccessor
+    '
+    If Not pa.isSet Then
+        InitSafeArray pa.sa, PTR_SIZE
+        CopyMemory ByVal VarPtr(pa), VarPtr(pa.sa), PTR_SIZE 'The only API call
+        pa.sa.pvData = VarPtr(pa.sa) 'Some valid address
+        pa.sa.rgsabound0.cElements = 1
+        pa.isSet = True
+    End If
+    '
+    InitSafeArray paToInit.sa, PTR_SIZE
+    pa.sa.pvData = VarPtr(paToInit)
+    pa.ptrs(0) = VarPtr(paToInit.sa)
+    paToInit.isSet = True
+End Sub
+    
 Public Function Factory() As Dictionary
     Set Factory = New Dictionary
 End Function
@@ -960,3 +990,65 @@ End Function
 Public Property Get HashVal(ByRef Key As Variant) As Long
     GetIndex Key, HashVal, hashOnly:=True
 End Property
+
+'@Enumerator
+Public Function NewEnum() As IEnumVARIANT
+Attribute NewEnum.VB_UserMemId = -4
+'Attribute NewEnum.VB_UserMemId = -4
+    Static c As New Collection
+    Static pa As PointerAccessor
+    '
+    Set NewEnum = c.[_NewEnum]
+    If m_data.UsedCount = 0 Then Exit Function
+    If Not pa.isSet Then Dictionary.InitPointerAccessor pa
+    '
+#If Win64 Then
+    Const variantSize As Long = 24
+#End If
+    Const nextItemOffset As Long = PTR_SIZE * 2
+    Dim i As Long
+    Dim hasGaps As Boolean
+    '
+    pa.sa.pvData = ObjPtr(NewEnum) + nextItemOffset
+    pa.sa.rgsabound0.cElements = 1
+    hasGaps = (m_data.UsedCount < m_data.Count)
+    '
+    If hasGaps Then
+        i = 0
+        Do While m_data.Meta(i) = hmRemoved
+            i = i + 1
+        Loop
+    End If
+    pa.ptrs(0) = VarPtr(m_data.Keys(i))
+    '
+#If Win64 Then
+    Dim j As Long
+    Dim ptr As LongLong
+    '
+    ptr = VarPtr(m_data.Keys(0))
+    pa.sa.pvData = ptr
+    pa.sa.rgsabound0.cElements = m_data.Count * 3
+    If hasGaps Then
+        j = i
+        For i = i + 1 To m_data.Count - 1
+            If m_data.Meta(i) <> hmRemoved Then
+                pa.ptrs(j * 3 + 5) = ptr + variantSize * i
+                j = i
+            End If
+        Next i
+    Else
+        For i = 5 To pa.sa.rgsabound0.cElements - 1 Step 3
+            ptr = ptr + variantSize
+            pa.ptrs(i) = ptr
+        Next i
+    End If
+#Else
+    
+    
+    
+#End If
+    '
+    pa.sa.rgsabound0.cElements = 0
+    pa.sa.pvData = NULL_PTR
+End Function
+
