@@ -229,8 +229,7 @@ Private Type ScrDictLayout 'Scripting.Dictionary memory layout
     hashModulo As Long
     compMode As Long
     localeID As Long
-    unkPtr2 As LongPtr
-    unkPtr3 As LongPtr
+    unkPtrs(0 To 2) As LongPtr
 End Type
 #End If
 
@@ -379,10 +378,12 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
     If hVal And hmObject Then Set m_data.Keys(i) = Key Else m_data.Keys(i) = Key
     If m_enumProvider.hasEnum Then
         RemoveUnusedEnums
-        ptr = VarPtr(m_data.Keys(i))
-        m_enumProvider.pa.sa.pvData = ptr
-        m_enumProvider.pa.sa.rgsabound0.cElements = 3
-        m_enumProvider.pa.ptrs(2) = ptr
+        If i > 0 Then
+            ptr = VarPtr(m_data.Keys(i))
+            m_enumProvider.pa.sa.pvData = ptr
+            m_enumProvider.pa.sa.rgsabound0.cElements = 3
+            m_enumProvider.pa.ptrs(2) = ptr
+        End If
     End If
     If IsObject(Item) Then
         m_data.Meta(i) = hVal Or IS_ITEM_OBJ
@@ -396,8 +397,8 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
         .IsKeyObj = CBool(hVal And hmObject)
         If .IsKeyObj Then Set .Value = Key Else .Value = Key
         If m_enumProvider.hasEnum Then
-            RemoveUnusedEnumProviders
-            m_data.Keys(i - 1).NextPtr = VarPtr(.Value)
+            RemoveUnusedEnums
+            If i > 0 Then m_data.Keys(i - 1).NextPtr = VarPtr(.Value)
         End If
         .IsItemObj = IsObject(Item)
         If .IsItemObj Then
@@ -916,12 +917,21 @@ Public Sub Remove(ByRef Key As Variant)
                 If m_enumProvider.hasEnum Then m_enumProvider.pa.ptrs(2) = ptr
                 m_data.Meta(i) = hVal
             #Else
+                ptr = m_data.Keys(i).NextPtr
                 m_data.Keys(i) = m_data.Keys(lastPos)
+                m_data.Keys(i).NextPtr = ptr
                 If m_enumProvider.hasEnum Then
                     RemoveUnusedEnums VarPtr(m_data.Keys(lastPos)), NULL_PTR
                     m_data.Keys(lastPos - 1).NextPtr = NULL_PTR
                 End If
-                hVal = m_data.Keys(i).Meta
+                With m_data.Keys(i)
+                    If .IsItemObj Then
+                        Set m_data.Items(i) = m_data.Items(lastPos)
+                    Else
+                        m_data.Items(i) = m_data.Items(lastPos)
+                    End If
+                    hVal = .Meta
+                End With
             #End If
             '
             'Update index inside hash map
@@ -955,17 +965,24 @@ Public Sub Remove(ByRef Key As Variant)
                 #End If
                 ptr = VarPtr(m_data.Keys(j))
                 RemoveUnusedEnums VarPtr(m_data.Keys(i)), ptr
-                Do While i > 0
-                    i = i - 1
+                j = i - 1
+                Do While j >= 0
                     #If Win64 Then
-                        If m_data.Meta(i) <> hmRemoved Then Exit Do
+                        If m_data.Meta(j) <> hmRemoved Then Exit Do
                     #Else
-                        If m_data.Keys(i).Meta <> hmRemoved Then Exit Do
+                        If m_data.Keys(j).Meta <> hmRemoved Then Exit Do
                     #End If
+                    j = j - 1
                 Loop
-                m_enumProvider.pa.sa.pvData = VarPtr(m_data.Keys(i + 1))
-                m_enumProvider.pa.sa.rgsabound0.cElements = 3
-                m_enumProvider.pa.ptrs(2) = ptr
+                If j >= 0 Then
+                    #If Win64 Then
+                        m_enumProvider.pa.sa.pvData = VarPtr(m_data.Keys(j + 1))
+                        m_enumProvider.pa.sa.rgsabound0.cElements = 3
+                        m_enumProvider.pa.ptrs(2) = ptr
+                    #Else
+                        m_data.Keys(j).NextPtr = ptr
+                    #End If
+                End If
             End If
             Exit Sub
         End If
@@ -1114,7 +1131,11 @@ Friend Sub InitHasher(ByRef h As Hasher)
         Next i
         '
         'Copy locale ID
-        lcid = CLng(pa.ptrs(10))
+        #If Win64 Then
+            lcid = CLng(pa.ptrs(10))
+        #Else
+            lcid = pa.ptrs(12)
+        #End If
         Set temp = Nothing 'Actual dictionary not needed anymore
         sdl.localeID = lcid
         '
@@ -1207,9 +1228,11 @@ Attribute NewEnum.VB_UserMemId = -4
     Dim hasGaps As Boolean: hasGaps = (m_data.UsedCount < m_data.Count)
     '
     If hasGaps Then
-        Do While m_data.Meta(i) = hmRemoved
-            i = i + 1
-        Loop
+        #If Win64 Then
+            Do While m_data.Meta(i) = hmRemoved: i = i + 1: Loop
+        #Else
+            Do While m_data.Keys(i).Meta = hmRemoved: i = i + 1: Loop
+        #End If
     End If
     With m_enumProvider.pa
         .sa.pvData = ObjPtr(NewEnum) + NEXT_ITEM_OFFSET
@@ -1219,10 +1242,9 @@ Attribute NewEnum.VB_UserMemId = -4
     If hadEnum Then Exit Function
     '
     Dim ptr As LongPtr: ptr = VarPtr(m_data.Keys(0))
-    '
-#If Win64 Then
     Dim j As Long
     '
+#If Win64 Then
     With m_enumProvider.pa
         .sa.pvData = ptr
         .sa.rgsabound0.cElements = (m_data.Count + 1) * 3
@@ -1254,7 +1276,7 @@ Attribute NewEnum.VB_UserMemId = -4
         Next i
         m_data.Keys(j).NextPtr = NULL_PTR
     Else
-        ptr = ptr + enumVarSize
+        ptr = ptr + ENUM_VAR_SIZE
         For i = 0 To m_data.Count - 2
             m_data.Keys(i).NextPtr = ptr + ENUM_VAR_SIZE * i
         Next i
@@ -1319,13 +1341,13 @@ Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
 #Else
     If hasGaps Then
         For i = 0 To m_data.Count - 2
-            With m_data.Keys(j)
+            With m_data.Keys(i)
                 If .NextPtr <> NULL_PTR Then .NextPtr = .NextPtr + addrShift
             End With
         Next i
     Else
         For i = 0 To m_data.Count - 2
-            m_data.Keys(i).NextPtr = m_data.Keys(j).NextPtr + addrShift
+            m_data.Keys(i).NextPtr = m_data.Keys(i).NextPtr + addrShift
         Next i
     End If
 #End If
