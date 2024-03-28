@@ -488,12 +488,12 @@ Private Function GetIndex(ByRef Key As Variant _
             Else 'Faster to loop integers
                 m_hasher.ia.sa.pvData = StrPtr(Key)
 #Else
-                m_hasher.ma.sa.rgsabound0.cElements = Len(Key)
+                m_hasher.ia.sa.rgsabound0.cElements = Len(Key)
                 If m_compare = vbBinaryCompare Then
-                    m_hasher.ma.sa.pvData = StrPtr(Key)
+                    m_hasher.ia.sa.pvData = StrPtr(Key)
                 Else
                     Dim s As String: s = LCase$(Key)
-                    m_hasher.ma.sa.pvData = StrPtr(s)
+                    m_hasher.ia.sa.pvData = StrPtr(s)
                 End If
 #End If
                 With m_hasher.ia
@@ -1069,7 +1069,7 @@ Private Sub InitLocalHasher()
     Const INT_SIZE As Long = 2
     InitSafeArray m_hasher.ia.sa, INT_SIZE
 #If Mac Then
-    CopyMemory ByVal VarPtr(m_hasher.ma.ic), VarPtr(m_hasher.ma.sa), PTR_SIZE
+    CopyMemory ByVal VarPtr(m_hasher.ia), VarPtr(m_hasher.ia.sa), PTR_SIZE
 #Else
     Dictionary.InitHasher m_hasher
     CompareMode = m_compare
@@ -1209,7 +1209,7 @@ Public Property Get HashVal(ByRef Key As Variant) As Long
 End Property
 
 '@Enumerator
-Public Function NewEnum() As IEnumVARIANT
+Public Function NewEnum() As IUnknown
 Attribute NewEnum.VB_UserMemId = -4
 'Attribute NewEnum.VB_UserMemId = -4
     Dim hadEnum As Boolean
