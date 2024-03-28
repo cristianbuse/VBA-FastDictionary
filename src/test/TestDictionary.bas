@@ -54,10 +54,14 @@ Private Sub TestDictionaryAdd()
     '
     For Each v In Array(Empty, Null, CInt(1), CLng(2), CSng(3), CDbl(4), CCur(5) _
                       , CDate(6), CStr(7), Nothing, New Collection, CVErr(2042) _
-                      , True, False, GetDefaultInterface(d.Factory), CDec(8) _
+                      , True, False, GetDefaultInterface(d.Factory) _
                       , CByte(9), ptr, vbNullString)
         d.Add v, v
     Next v
+    #If Mac = 0 Then
+        v = CDec(8)
+        d.Add v, v
+    #End If
     '
     On Error Resume Next
     For Each v In Array(CLng(3), Array(), 0, -1, Array(1, 2, 3), Empty)
@@ -122,7 +126,9 @@ Private Sub TestDictionaryCompare()
     d.RemoveAll
     d.CompareMode = lcidCroatian
     d.Add uDZ, 1
+#If Mac = 0 Then
     Debug.Assert Not d.Exists(ldz)
+#End If
 End Sub
 
 Private Sub TestDictionaryCount()
