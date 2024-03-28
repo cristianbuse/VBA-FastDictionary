@@ -56,13 +56,15 @@ Attribute VB_Exposed = False
 ''         - If the number of Key-Item pairs is known before adding or a good
 ''           guess is possible then a call to 'PredictCount' with the expected
 ''           count will prepare the internal size of the hash map so that there
-''           are no calls made to 'Rehash' thus resulting in  better performance
+''           are no calls made to 'Rehash' thus resulting in better performance
 ''    * Remove
 ''         - Removes an item by Key
+''         - Preserves insertion order (default) unless 'FastUnorderedRemove' is
+''           set to 'True'
 ''    * RemoveAll
-''         - Removes all Items
+''         - Removes all Key-Item pairs
 ''    * Self
-''         - Self instance - useful in 'With New Dictionary' blocks
+''         - Self instance - useful in 'With New Dictionary' code blocks
 '' Properties:
 ''    * CompareMode <Get/Let>
 ''         - Can only be changed if there are no stored items
@@ -73,8 +75,8 @@ Attribute VB_Exposed = False
 ''         - Can only be changed if there are no stored items
 ''         - If set to 'False' (Default) then calling 'Remove' preserves the
 ''           order in which the Key-Item pairs were added but calling 'Items'
-''           and 'Keys' will be slower. If 'Remove' is not called then this
-''           setting has no effect
+''           and 'Keys' will be slower if there are any gaps in the storage
+''           arrays. If 'Remove' is not called then this setting has no effect
 ''         - If set to 'True' then calling 'Remove' ruins the order in which the
 ''           Key-Item pairs were added but calling 'Items' and 'Keys' will be
 ''           as fast as copying the entire array in one instruction
@@ -100,15 +102,27 @@ Option Compare Binary
 
 #If Mac Then
     #If VBA7 Then
-        Private Declare PtrSafe Function CopyMemory Lib "/usr/lib/libc.dylib" Alias "memmove" (Destination As Any, Source As Any, ByVal Length As LongPtr) As LongPtr
+        Private Declare PtrSafe Function CopyMemory Lib "/usr/lib/libc.dylib" _
+                Alias "memmove" (Destination As Any _
+                               , Source As Any _
+                               , ByVal Length As LongPtr) As LongPtr
     #Else
-        Private Declare Function CopyMemory Lib "/usr/lib/libc.dylib" Alias "memmove" (Destination As Any, Source As Any, ByVal length As Long) As Long
+        Private Declare Function CopyMemory Lib "/usr/lib/libc.dylib" _
+                Alias "memmove" (Destination As Any _
+                               , Source As Any _
+                               , ByVal Length As Long) As Long
     #End If
 #Else 'Windows
     #If VBA7 Then
-        Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
+        Private Declare PtrSafe Sub CopyMemory Lib "kernel32" _
+                Alias "RtlMoveMemory" (Destination As Any _
+                                     , Source As Any _
+                                     , ByVal Length As LongPtr)
     #Else
-        Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal length As Long)
+        Private Declare Sub CopyMemory Lib "kernel32" _
+                Alias "RtlMoveMemory" (Destination As Any _
+                                     , Source As Any _
+                                     , ByVal Length As Long)
     #End If
 #End If
 #If VBA7 = 0 Then
@@ -128,6 +142,7 @@ Const INITIAL_GROUP_COUNT As Long = 16
     Const HIGH_BIT_ONLY As LongLong = &H8080808080808080^
     Const BYTE_BROADCAST As LongLong = &H101010101010101^
     Const POSITION_PRIME As LongLong = 19
+    Const VARIANT_SIZE As Long = 24
 #Else
     Const NULL_PTR As Long = 0&
     Const PTR_SIZE As Long = 4
@@ -136,6 +151,7 @@ Const INITIAL_GROUP_COUNT As Long = 16
     Const HIGH_BIT_ONLY As Long = &H80808080
     Const BYTE_BROADCAST As Long = &H1010101
     Const POSITION_PRIME As Long = 7
+    Const ENUM_VAR_SIZE As Long = 28
 #End If
 #If (Win64 = 0) Or Mac Then
     Const vbLongLong = 20
@@ -145,6 +161,7 @@ Const GROUP_SIZE As Long = PTR_SIZE
 Const NHIGH_BIT_OFF = HIGH_BIT_OFF Or SIGN_BIT
 Const INTS_IN_DOUBLE As Long = 4
 Const NOT_FOUND As Long = -1
+Const NEXT_ITEM_OFFSET As Long = PTR_SIZE * 2
 #If Win64 Then
     Const IS_ITEM_OBJ As Long = &H80000000
     Const KEY_MASK As Long = &H7FFFFFFF
@@ -276,13 +293,20 @@ Private Type Lookups
 #End If
 End Type
 
+Private Type EnumProvider
+    hasEnum As Boolean
+    coll As New Collection
+    pa As PointerAccessor
+End Type
+
 'Class members
 Private m_compare As VbCompareMethod
 Private m_data As DataStorage
+Private m_enumProvider As EnumProvider
 Private m_fastUnorderedRemove As Boolean
 Private m_hash As HashMap
 Private m_hasher As Hasher
-Private m_isOrdered As Boolean
+Private m_isUnordered As Boolean
 Private m_lookups As Lookups
 
 Private Sub Init(Optional ByVal newGroupCount As Long = INITIAL_GROUP_COUNT)
@@ -290,7 +314,7 @@ Private Sub Init(Optional ByVal newGroupCount As Long = INITIAL_GROUP_COUNT)
     m_data.Count = 0
     m_data.UBound = 0
     m_data.UsedCount = 0
-    m_isOrdered = True
+    m_isUnordered = False
     ReDim m_data.Items(0 To 0)
     ReDim m_data.Keys(0 To 0)
 #If Win64 Then
@@ -300,6 +324,8 @@ Private Sub Init(Optional ByVal newGroupCount As Long = INITIAL_GROUP_COUNT)
         InitLookups
         InitLocalHasher
     End If
+    Set m_enumProvider.coll = Nothing 'Clears NextPtr in all live IEnumVariant's
+    m_enumProvider.hasEnum = False
 End Sub
 
 'Raises Error 457 if a duplicated key was specified
@@ -315,12 +341,20 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
     If m_data.Count > m_data.UBound Then
         m_data.UBound = m_data.UBound * 2 + 1
         ReDim Preserve m_data.Items(0 To m_data.UBound)
+        '
+        If m_enumProvider.hasEnum Then
+            Dim ptr As LongPtr: ptr = VarPtr(m_data.Keys(0))
+            RemoveUnusedEnums
+        End If
         #If Win64 Then 'Extra member for safe IEnumVariant
             ReDim Preserve m_data.Keys(0 To m_data.UBound + 1)
             ReDim Preserve m_data.Meta(0 To m_data.UBound)
         #Else
             ReDim Preserve m_data.Keys(0 To m_data.UBound)
         #End If
+        If m_enumProvider.hasEnum Then
+            ShiftEnumPointers VarPtr(m_data.Keys(0)) - ptr
+        End If
     End If
     i = m_data.Count
     m_data.Count = m_data.Count + 1
@@ -343,6 +377,13 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
     '
 #If Win64 Then
     If hVal And hmObject Then Set m_data.Keys(i) = Key Else m_data.Keys(i) = Key
+    If m_enumProvider.hasEnum Then
+        RemoveUnusedEnums
+        ptr = VarPtr(m_data.Keys(i))
+        m_enumProvider.pa.sa.pvData = ptr
+        m_enumProvider.pa.sa.rgsabound0.cElements = 3
+        m_enumProvider.pa.ptrs(2) = ptr
+    End If
     If IsObject(Item) Then
         m_data.Meta(i) = hVal Or IS_ITEM_OBJ
         Set m_data.Items(i) = Item
@@ -354,6 +395,10 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
     With m_data.Keys(i)
         .IsKeyObj = CBool(hVal And hmObject)
         If .IsKeyObj Then Set .Value = Key Else .Value = Key
+        If m_enumProvider.hasEnum Then
+            RemoveUnusedEnumProviders
+            m_data.Keys(i - 1).NextPtr = VarPtr(.Value)
+        End If
         .IsItemObj = IsObject(Item)
         If .IsItemObj Then
             Set m_data.Items(i) = Item
@@ -605,17 +650,20 @@ Public Function Exists(ByRef Key As Variant) As Boolean
 End Function
 
 Public Property Get IsOrdered() As Boolean
-    IsOrdered = m_isOrdered
+    IsOrdered = Not m_isUnordered
 End Property
 
 'Raises Error:
-'   -    5: invalid key (key is not associated with any element)
+'   -    9: invalid key (key is not associated with any element)
 '   -  450: 'Set' is missing when assigning an object
 '@DefaultMember
 Public Property Get Item(ByRef Key As Variant) As Variant
 Attribute Item.VB_UserMemId = 0
 'Attribute Item.VB_UserMemId = 0
     Dim i As Long: i = GetIndex(Key)
+    '
+    'A check like i = NOT_FOUND is avoided for speed purposes
+    '   because error 9 is raised anyway when accessing the data arrays
 #If Win64 Then
     If m_data.Meta(i) And IS_ITEM_OBJ Then
 #Else
@@ -690,7 +738,7 @@ End Function
 
 'Change an existing key value
 'Raises Error:
-'   -   5: invalid OldKey (key is not associated with any element)
+'   -   9: invalid OldKey (key is not associated with any element)
 '   - 457: invalid NewKey (key is already associated with an element)
 Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     Dim hVal As Long
@@ -702,15 +750,24 @@ Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     '
     If GetIndex(NewKey, hVal, , controlByte) > NOT_FOUND Then Err.Raise 457
     i = GetIndex(OldKey, , groupSlot, , posInGroup)
-    If i = NOT_FOUND Then Err.Raise 5, TypeName(Me) & ".Key", "Key not found"
+    '
+    'A check like i = NOT_FOUND is avoided for speed purposes
+    '   because error 9 is raised anyway when accessing the Keys array
     '
     'Replace Key and Meta while preserving Item
 #If Win64 Then
+    If m_enumProvider.hasEnum Then
+        RemoveUnusedEnums
+        m_enumProvider.pa.sa.pvData = VarPtr(m_data.Keys(i))
+        m_enumProvider.pa.sa.rgsabound0.cElements = 3
+        Dim ptr As LongPtr: ptr = m_enumProvider.pa.ptrs(2)
+    End If
     If hVal And HashMeta.hmObject Then
         Set m_data.Keys(i) = NewKey
     Else
         m_data.Keys(i) = NewKey
     End If
+    If m_enumProvider.hasEnum Then m_enumProvider.pa.ptrs(2) = ptr
     If m_data.Meta(i) And IS_ITEM_OBJ Then hVal = hVal Or IS_ITEM_OBJ
     m_data.Meta(i) = hVal
 #Else
@@ -821,6 +878,7 @@ Public Sub Remove(ByRef Key As Variant)
     Dim lastPos As Long
     Dim i As Long
     Dim j As Long
+    Dim ptr As LongPtr
     '
     i = GetIndex(Key, , groupSlot, , posInGroup)
     If i = NOT_FOUND Then Err.Raise 5, TypeName(Me) & ".Remove"
@@ -835,7 +893,7 @@ Public Sub Remove(ByRef Key As Variant)
     m_data.UsedCount = m_data.UsedCount - 1
     If i < lastPos Then
         If m_fastUnorderedRemove Then
-            m_isOrdered = False
+            m_isUnordered = True
             'Swap data
             #If Win64 Then
                 hVal = m_data.Meta(lastPos)
@@ -844,14 +902,25 @@ Public Sub Remove(ByRef Key As Variant)
                 Else
                     m_data.Items(i) = m_data.Items(lastPos)
                 End If
+                If m_enumProvider.hasEnum Then
+                    RemoveUnusedEnums VarPtr(m_data.Keys(lastPos)), NULL_PTR
+                    m_enumProvider.pa.sa.pvData = VarPtr(m_data.Keys(i))
+                    m_enumProvider.pa.sa.rgsabound0.cElements = 3
+                    ptr = m_enumProvider.pa.ptrs(2)
+                End If
                 If hVal And HashMeta.hmObject Then
                     Set m_data.Keys(i) = m_data.Keys(lastPos)
                 Else
                     m_data.Keys(i) = m_data.Keys(lastPos)
                 End If
+                If m_enumProvider.hasEnum Then m_enumProvider.pa.ptrs(2) = ptr
                 m_data.Meta(i) = hVal
             #Else
                 m_data.Keys(i) = m_data.Keys(lastPos)
+                If m_enumProvider.hasEnum Then
+                    RemoveUnusedEnums VarPtr(m_data.Keys(lastPos)), NULL_PTR
+                    m_data.Keys(lastPos - 1).NextPtr = NULL_PTR
+                End If
                 hVal = m_data.Keys(i).Meta
             #End If
             '
@@ -877,18 +946,47 @@ Public Sub Remove(ByRef Key As Variant)
                 m_data.Keys(i).Value = Empty
                 m_data.Keys(i).Meta = hmRemoved
             #End If
+            If m_enumProvider.hasEnum Then 'Link previous to next
+                j = i + 1
+                #If Win64 Then
+                    Do While m_data.Meta(j) = hmRemoved: j = j + 1: Loop
+                #Else
+                    Do While m_data.Keys(j).Meta = hmRemoved: j = j + 1: Loop
+                #End If
+                ptr = VarPtr(m_data.Keys(j))
+                RemoveUnusedEnums VarPtr(m_data.Keys(i)), ptr
+                Do While i > 0
+                    i = i - 1
+                    #If Win64 Then
+                        If m_data.Meta(i) <> hmRemoved Then Exit Do
+                    #Else
+                        If m_data.Keys(i).Meta <> hmRemoved Then Exit Do
+                    #End If
+                Loop
+                m_enumProvider.pa.sa.pvData = VarPtr(m_data.Keys(i + 1))
+                m_enumProvider.pa.sa.rgsabound0.cElements = 3
+                m_enumProvider.pa.ptrs(2) = ptr
+            End If
             Exit Sub
         End If
-    ElseIf m_data.Count > m_data.UsedCount Then
-        i = lastPos - 1
-#If Win64 Then
-        Do While m_data.Meta(i) = hmRemoved
-#Else
-        Do While m_data.Keys(i).Meta = hmRemoved
-#End If
-            m_data.Count = m_data.Count - 1
-            i = i - 1 'Cannot go out of bounds due to previous check
-        Loop
+    Else
+        If m_data.Count > m_data.UsedCount Then
+            i = lastPos - 1
+            #If Win64 Then
+                Do While m_data.Meta(i) = hmRemoved: i = i - 1: Loop
+            #Else
+                Do While m_data.Keys(i).Meta = hmRemoved: i = i - 1: Loop
+            #End If
+            m_data.Count = m_data.Count - lastPos + i + 1
+        End If
+        If m_enumProvider.hasEnum Then
+            RemoveUnusedEnums VarPtr(m_data.Keys(lastPos)), NULL_PTR
+            #If Win64 Then
+                m_data.Keys(i + 1) = Empty 'Just to clear the pointer
+            #Else
+                m_data.Keys(i).NextPtr = NULL_PTR
+            #End If
+        End If
     End If
     'Clear Variants in case deallocation is needed e.g. String/Object
     m_data.Items(lastPos) = Empty
@@ -898,6 +996,7 @@ Public Sub Remove(ByRef Key As Variant)
         m_data.Keys(lastPos).Value = Empty
     #End If
     m_data.Count = m_data.Count - 1
+    m_isUnordered = m_isUnordered And (m_data.UsedCount > 1)
 End Sub
 
 Public Sub RemoveAll()
@@ -911,6 +1010,7 @@ End Function
 
 'Returns the current % load for the hash map containing indexes
 Public Property Get LoadFactor() As Single
+    If m_hash.GroupCount = 0 Then Exit Property
     LoadFactor = m_data.UsedCount / (m_hash.GroupCount * GROUP_SIZE)
 End Property
 
@@ -1091,71 +1191,144 @@ End Property
 Public Function NewEnum() As IEnumVARIANT
 Attribute NewEnum.VB_UserMemId = -4
 'Attribute NewEnum.VB_UserMemId = -4
-    Static c As New Collection
-    Static pa As PointerAccessor
+    Dim hadEnum As Boolean
     '
-    Set NewEnum = c.[_NewEnum]
+    With m_enumProvider
+        hadEnum = .hasEnum
+        If .hasEnum Then RemoveUnusedEnums
+        Set NewEnum = .coll.[_NewEnum]
+        .hasEnum = True
+        .coll.Add NewEnum, CStr(ObjPtr(NewEnum))
+        If Not .pa.isSet Then Dictionary.InitPointerAccessor .pa
+    End With
     If m_data.UsedCount = 0 Then Exit Function
-    If Not pa.isSet Then Dictionary.InitPointerAccessor pa
     '
-    Const nextItemOffset As Long = PTR_SIZE * 2
     Dim i As Long
-    Dim hasGaps As Boolean
-    Dim ptr As LongPtr
-    '
-    pa.sa.pvData = ObjPtr(NewEnum) + nextItemOffset
-    pa.sa.rgsabound0.cElements = 1
-    hasGaps = (m_data.UsedCount < m_data.Count)
+    Dim hasGaps As Boolean: hasGaps = (m_data.UsedCount < m_data.Count)
     '
     If hasGaps Then
-        i = 0
         Do While m_data.Meta(i) = hmRemoved
             i = i + 1
         Loop
     End If
-    pa.ptrs(0) = VarPtr(m_data.Keys(i))
-    ptr = VarPtr(m_data.Keys(0))
+    With m_enumProvider.pa
+        .sa.pvData = ObjPtr(NewEnum) + NEXT_ITEM_OFFSET
+        .sa.rgsabound0.cElements = 1
+        .ptrs(0) = VarPtr(m_data.Keys(i))
+    End With
+    If hadEnum Then Exit Function
+    '
+    Dim ptr As LongPtr: ptr = VarPtr(m_data.Keys(0))
     '
 #If Win64 Then
-    Const variantSize As Long = 24
     Dim j As Long
     '
-    pa.sa.pvData = ptr
-    pa.sa.rgsabound0.cElements = m_data.Count * 3
-    If hasGaps Then
-        j = i
-        For i = i + 1 To m_data.Count - 1
-            If m_data.Meta(i) <> hmRemoved Then
-                pa.ptrs(j * 3 + 5) = ptr + variantSize * i
-                j = i
-            End If
-        Next i
-    Else
-        For i = 5 To pa.sa.rgsabound0.cElements - 1 Step 3
-            ptr = ptr + variantSize
-            pa.ptrs(i) = ptr
-        Next i
-    End If
+    With m_enumProvider.pa
+        .sa.pvData = ptr
+        .sa.rgsabound0.cElements = (m_data.Count + 1) * 3
+        If hasGaps Then
+            j = i * 3 + 5
+            For i = i + 1 To m_data.Count - 1
+                If m_data.Meta(i) <> hmRemoved Then
+                    .ptrs(j) = ptr + VARIANT_SIZE * i
+                    j = i * 3 + 5
+                End If
+            Next i
+            .ptrs(j) = NULL_PTR
+        Else
+            For i = 5 To .sa.rgsabound0.cElements - 4 Step 3
+                ptr = ptr + VARIANT_SIZE
+                .ptrs(i) = ptr
+            Next i
+            .ptrs(i) = NULL_PTR
+        End If
+    End With
 #Else
-    Const enumVarSize As Long = 28
-    '
     If hasGaps Then
         j = i
         For i = i + 1 To m_data.Count - 1
             If m_data.Keys(i).Meta <> hmRemoved Then
-                m_data.Keys(j).NextPtr = ptr + enumVarSize * i
+                m_data.Keys(j).NextPtr = ptr + ENUM_VAR_SIZE * i
                 j = i
             End If
         Next i
+        m_data.Keys(j).NextPtr = NULL_PTR
     Else
         ptr = ptr + enumVarSize
         For i = 0 To m_data.Count - 2
-            m_data.Keys(i).NextPtr = ptr + enumVarSize * i
+            m_data.Keys(i).NextPtr = ptr + ENUM_VAR_SIZE * i
+        Next i
+        m_data.Keys(i).NextPtr = NULL_PTR
+    End If
+#End If
+    m_enumProvider.pa.sa.rgsabound0.cElements = 0
+    m_enumProvider.pa.sa.pvData = NULL_PTR
+End Function
+
+Private Sub RemoveUnusedEnums(Optional ByVal searchPtr As LongPtr _
+                            , Optional ByVal replacePtr As LongPtr)
+    Dim e As Variant 'IEnumVARIANT does not work with For Each
+    With m_enumProvider
+        For Each e In .coll
+            Dim ptr As LongPtr: ptr = ObjPtr(e)
+            .pa.sa.pvData = ptr + NEXT_ITEM_OFFSET
+            .pa.sa.rgsabound0.cElements = 1
+            If .pa.ptrs(0) = NULL_PTR Then
+                .coll.Remove CStr(ptr)
+            ElseIf .pa.ptrs(0) = searchPtr Then
+                If replacePtr = NULL_PTR Then
+                    .coll.Remove CStr(ptr)
+                Else
+                    .pa.ptrs(0) = replacePtr
+                End If
+            End If
+        Next e
+        .hasEnum = (.coll.Count > 0)
+        .pa.sa.rgsabound0.cElements = 0
+        .pa.sa.pvData = NULL_PTR
+    End With
+End Sub
+
+Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
+    Dim e As Variant 'IEnumVARIANT does not work with For Each
+    With m_enumProvider
+        For Each e In .coll
+            .pa.sa.pvData = ObjPtr(e) + NEXT_ITEM_OFFSET
+            .pa.sa.rgsabound0.cElements = 1
+            .pa.ptrs(0) = .pa.ptrs(0) + addrShift
+        Next e
+    End With
+    '
+    Dim hasGaps As Boolean: hasGaps = (m_data.UsedCount < m_data.Count)
+    Dim i As Long
+    '
+#If Win64 Then
+    With m_enumProvider.pa
+        .sa.pvData = VarPtr(m_data.Keys(0))
+        .sa.rgsabound0.cElements = m_data.Count * 3
+        If hasGaps Then
+            For i = 5 To .sa.rgsabound0.cElements - 1 Step 3
+                If .ptrs(i) <> NULL_PTR Then .ptrs(i) = .ptrs(i) + addrShift
+            Next i
+        Else
+            For i = 5 To .sa.rgsabound0.cElements - 1 Step 3
+                .ptrs(i) = .ptrs(i) + addrShift
+            Next i
+        End If
+    End With
+#Else
+    If hasGaps Then
+        For i = 0 To m_data.Count - 2
+            With m_data.Keys(j)
+                If .NextPtr <> NULL_PTR Then .NextPtr = .NextPtr + addrShift
+            End With
+        Next i
+    Else
+        For i = 0 To m_data.Count - 2
+            m_data.Keys(i).NextPtr = m_data.Keys(j).NextPtr + addrShift
         Next i
     End If
 #End If
-    '
-    pa.sa.rgsabound0.cElements = 0
-    pa.sa.pvData = NULL_PTR
-End Function
-
+    m_enumProvider.pa.sa.rgsabound0.cElements = 0
+    m_enumProvider.pa.sa.pvData = NULL_PTR
+End Sub
