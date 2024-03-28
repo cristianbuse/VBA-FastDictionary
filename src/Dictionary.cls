@@ -870,7 +870,7 @@ End Sub
 
 'Remove a single item
 'Raises Error:
-'   -   5: invalid key (key is not associated with any element)
+'   -   9: invalid key (key is not associated with any element)
 Public Sub Remove(ByRef Key As Variant)
     Dim hVal As Long
     Dim groupSlot As Long
@@ -881,7 +881,7 @@ Public Sub Remove(ByRef Key As Variant)
     Dim ptr As LongPtr
     '
     i = GetIndex(Key, , groupSlot, , posInGroup)
-    If i = NOT_FOUND Then Err.Raise 5, TypeName(Me) & ".Remove"
+    If i = NOT_FOUND Then Err.Raise 9, TypeName(Me) & ".Remove"
     If m_data.UsedCount = 1 Then
         Init
         Exit Sub
