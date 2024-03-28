@@ -382,6 +382,9 @@ Private Sub TestDictionaryItem()
         v = d.Item(i)
         Debug.Assert Err.Number = keyNotFoundErr
     Next i
+    Err.Clear
+    v = d.Item(Array())
+    Debug.Assert Err.Number = unsupportedKeyErr
     On Error GoTo 0
     '
     d.Add "Aa", 1
@@ -449,6 +452,12 @@ Private Sub TestDictionaryKey()
     Err.Clear
     d.Key("oldkey") = "newKey"
     Debug.Assert Err.Number = keyNotFoundErr
+    Err.Clear
+    d.Key(Array()) = "newKey"
+    Debug.Assert Err.Number = unsupportedKeyErr
+    Err.Clear
+    d.Key("oldkey") = Array(1, 2, 3)
+    Debug.Assert Err.Number = unsupportedKeyErr
     On Error GoTo 0
     '
     d.Key("oldKey") = "newKey"
@@ -746,6 +755,9 @@ Private Sub TestDictionaryRemove()
     On Error Resume Next
     d.Remove Null
     Debug.Assert Err.Number = keyNotFoundErr
+    Err.Clear
+    d.Remove Array()
+    Debug.Assert Err.Number = unsupportedKeyErr
     On Error GoTo 0
     '
     d.Remove CVErr(3)
