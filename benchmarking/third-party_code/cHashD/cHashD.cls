@@ -1,14 +1,10 @@
 VERSION 1.0 CLASS
 BEGIN
   MultiUse = -1  'True
-  Persistable = 0  'NotPersistable
-  DataBindingBehavior = 0  'vbNone
-  DataSourceBehavior  = 0  'vbNone
-  MTSTransactionMode  = 0  'NotAnMTSObject
 END
 Attribute VB_Name = "cHashD"
 Attribute VB_GlobalNameSpace = False
-Attribute VB_Creatable = True
+Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = False
 Attribute VB_Exposed = False
 Option Explicit 'cHashD, Olaf Schmidt in August 2016 (enhanced about mixed, variable KeyTypes and Remove-functions in 2020)
@@ -40,7 +36,7 @@ Private Sub Class_Initialize()
   If LWC(97) = 0 Then InitLWC
 End Sub
 
-Public Sub ReInit(Optional ByVal ExpectedMaxCount As Long, Optional ByVal EnsureUniqueKeys As Boolean)
+Public Sub ReInit(Optional ByVal ExpectedMaxCount As Long, Optional ByVal EnsureUniqueKeys As Boolean = True)
   If ExpectedMaxCount <= 0 Then ExpectedMaxCount = mLastExpectedMaxCount
   If ExpectedMaxCount < 128 Then ExpectedMaxCount = 128
   mLastExpectedMaxCount = ExpectedMaxCount
@@ -83,7 +79,12 @@ Public Function Keys() As Variant()
   Dim i As Long, j As Long, V(): ReDim V(0 To mCount - 1)
   For i = 0 To mCount - 1
     Do While mValues(j) = NoEntry: j = j + 1: Loop
-    VariantCopy V(i), ByVal VarPtr(mKeys(j)): j = j + 1
+    #If VBA7 Or Mac Then
+      If IsObject(mKeys(j)) Then Set V(i) = mKeys(j) Else V(i) = mKeys(j)
+      j = j + 1
+    #Else
+      VariantCopy V(i), ByVal VarPtr(mKeys(j)): j = j + 1
+    #End If
   Next
 
   Keys = V
@@ -94,7 +95,12 @@ Public Function Items() As Variant()
   Dim i As Long, j As Long, V(): ReDim V(0 To mCount - 1)
   For i = 0 To mCount - 1
     Do While mValues(j) = NoEntry: j = j + 1: Loop
-    VariantCopy V(i), ByVal VarPtr(mValues(j)): j = j + 1
+    #If VBA7 Or Mac Then
+      If IsObject(mValues(j)) Then Set V(i) = mValues(j) Else V(i) = mValues(j)
+      j = j + 1
+    #Else
+      VariantCopy V(i), ByVal VarPtr(mValues(j)): j = j + 1
+    #End If
   Next
 
   Items = V
@@ -137,8 +143,13 @@ Dim H As Long, UB As Long, i As Long
   Else
      i = mCount
   End If
+#If VBA7 Or Mac Then
+  If IsObject(Item) Then Set mValues(i) = Item Else mValues(i) = Item
+  If IsObject(Key) Then Set mKeys(i) = Key Else mKeys(i) = Key
+#Else
   VariantCopyInd ByVal VarPtr(mValues(i)), ByVal VarPtr(Item)
   VariantCopyInd ByVal VarPtr(mKeys(i)), ByVal VarPtr(Key)
+#End If
 
   'add the new DataIndex to the proper Hash-Buckets
   Select Case HashTable(H).Count
@@ -202,43 +213,83 @@ End Function
 Public Property Get KeyByIndex(ByVal IndexZeroBased As Long)
   If IndexZeroBased < 0 Or IndexZeroBased >= mCount Then Err.Raise 9
   If mFCount Then AdjustIndex IndexZeroBased
+#If VBA7 Or Mac Then
+  If IsObject(mKeys(IndexZeroBased)) Then Set KeyByIndex = mKeys(IndexZeroBased) _
+                                     Else KeyByIndex = mKeys(IndexZeroBased)
+#Else
   VariantCopy KeyByIndex, ByVal VarPtr(mKeys(IndexZeroBased))
+#End If
 End Property
 
 Public Property Get ItemByIndex(ByVal IndexZeroBased As Long)
   If IndexZeroBased < 0 Or IndexZeroBased >= mCount Then Err.Raise 9
   If mFCount Then AdjustIndex IndexZeroBased
+#If VBA7 Or Mac Then
+  If IsObject(mValues(IndexZeroBased)) Then Set ItemByIndex = mValues(IndexZeroBased) _
+                                       Else ItemByIndex = mValues(IndexZeroBased)
+#Else
   VariantCopy ItemByIndex, ByVal VarPtr(mValues(IndexZeroBased))
+#End If
 End Property
 Public Property Let ItemByIndex(ByVal IndexZeroBased As Long, RHS)
   If IndexZeroBased < 0 Or IndexZeroBased >= mCount Then Err.Raise 9
   If mFCount Then AdjustIndex IndexZeroBased
+#If VBA7 Or Mac Then
+  If IsObject(RHS) Then Set mValues(IndexZeroBased) = RHS Else mValues(IndexZeroBased) = RHS
+#Else
   VariantCopyInd ByVal VarPtr(mValues(IndexZeroBased)), ByVal VarPtr(RHS)
+#End If
 End Property
 Public Property Set ItemByIndex(ByVal IndexZeroBased As Long, RHS)
   If IndexZeroBased < 0 Or IndexZeroBased >= mCount Then Err.Raise 9
   If mFCount Then AdjustIndex IndexZeroBased
+#If VBA7 Or Mac Then
+  If IsObject(RHS) Then Set mValues(IndexZeroBased) = RHS Else mValues(IndexZeroBased) = RHS
+#Else
   VariantCopyInd ByVal VarPtr(mValues(IndexZeroBased)), ByVal VarPtr(RHS)
+#End If
 End Property
 
 Public Property Get Item(Key)
 Attribute Item.VB_UserMemId = 0
 Dim Index As Long:  Index = FindIndex(Key)
- If Index >= 0 Then VariantCopy Item, ByVal VarPtr(mValues(Index))
+ If Index >= 0 Then
+#If VBA7 Or Mac Then
+  If IsObject(mValues(Index)) Then Set Item = mValues(Index) Else Item = mValues(Index)
+#Else
+    VariantCopy Item, ByVal VarPtr(mValues(Index))
+#End If
+ End If
 End Property
 Public Property Let Item(Key, RHS)
 Dim Index As Long:  Index = FindIndex(Key, mLastH)
- If Index = -1 Then Add Key, RHS Else VariantCopyInd ByVal VarPtr(mValues(Index)), ByVal VarPtr(RHS)
+ If Index = -1 Then
+    Add Key, RHS
+ Else
+#If VBA7 Or Mac Then
+  If IsObject(RHS) Then Set mValues(Index) = RHS Else mValues(Index) = RHS
+#Else
+    VariantCopyInd ByVal VarPtr(mValues(Index)), ByVal VarPtr(RHS)
+#End If
+ End If
  mLastH = 0
 End Property
 Public Property Set Item(Key, RHS)
 Dim Index As Long:  Index = FindIndex(Key, mLastH)
- If Index = -1 Then Add Key, RHS Else VariantCopyInd ByVal VarPtr(mValues(Index)), ByVal VarPtr(RHS)
+ If Index = -1 Then
+    Add Key, RHS
+ Else
+#If VBA7 Or Mac Then
+  If IsObject(RHS) Then Set mValues(Index) = RHS Else mValues(Index) = RHS
+#Else
+    VariantCopyInd ByVal VarPtr(mValues(Index)), ByVal VarPtr(RHS)
+#End If
+ End If
  mLastH = 0
 End Property
 
 Private Function FindIndex(Key, Optional H As Long) As Long  'return -1, when no Key can be found
-  Dim i As Long, C@, D#, L&, F!, VT As VbVarType, HTUB As Long
+  Dim i As Long, C@, D#, L As LongPtr, F!, VT As VbVarType, HTUB As Long
   HTUB = mHashTableSize - 1
   FindIndex = H
   H = HTUB 'init the HashValue (all bits to 1)
@@ -367,3 +418,13 @@ Dim i As Long, Count As Long, cc As Long, Min As Long, Max As Long
   Debug.Print "Min-Entries:"; Min
   Debug.Print "Max-Entries:"; Max
 End Sub
+
+Public Property Get LoadFactor() As Double
+    Dim i As Long
+    Dim C As Long
+    
+    For i = 0 To UBound(HashTable)
+        If HashTable(i).Count > DynTakeOver Then C = C + UBound(HashTable(i).DataIdxsDyn) - DynTakeOver + 1
+    Next i
+    LoadFactor = mCount / (C + DynTakeOver * (UBound(HashTable) + 1))
+End Property
