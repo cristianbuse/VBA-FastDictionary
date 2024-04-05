@@ -158,7 +158,7 @@ Const INITIAL_GROUP_COUNT As Long = 16
 #End If
 
 Const GROUP_SIZE As Long = PTR_SIZE
-Const NHIGH_BIT_OFF = HIGH_BIT_OFF Or SIGN_BIT
+Const NHIGH_BIT_OFF As Long = HIGH_BIT_OFF Or SIGN_BIT
 Const INTS_IN_DOUBLE As Long = 4
 Const NOT_FOUND As Long = -1
 Const NEXT_ITEM_OFFSET As Long = PTR_SIZE * 2
@@ -714,6 +714,7 @@ Public Function Items() As Variant()
         Items = m_data.Items
         ReDim Preserve Items(0 To m_data.Count - 1)
     Else
+        Dim res() As Variant
         ReDim res(0 To m_data.UsedCount - 1)
         Dim i As Long
         Dim j As Long
@@ -746,7 +747,6 @@ Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     Dim groupSlot As Long
     Dim posInGroup As Long
     Dim controlByte As Long
-    Dim lastPos As Long
     Dim i As Long
     '
     If GetIndex(NewKey, hVal, , controlByte) > NOT_FOUND Then Err.Raise 457
@@ -783,7 +783,7 @@ Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     '
     'Update hash map with new key
     groupSlot = hVal Mod m_hash.GroupCount
-    Do While m_hash.Groups(groupSlot).WasEverFull
+    Do While m_hash.Groups(groupSlot).Count = GROUP_SIZE
          groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
     Loop
     With m_hash.Groups(groupSlot)
