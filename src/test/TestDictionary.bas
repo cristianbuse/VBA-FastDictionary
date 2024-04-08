@@ -167,6 +167,10 @@ Private Sub TestDictionaryExists()
     d.Add Null, Null
     d.Add 0, 0
     d.Add #3/31/2024#, "KB"
+    d.Add PosInf, 1
+    d.Add NegInf, 2
+    d.Add SNaN, 3
+    d.Add QNaN, 4
     '
     Debug.Assert d.Exists("key1")
     Debug.Assert Not d.Exists("key2")
@@ -183,12 +187,37 @@ Private Sub TestDictionaryExists()
     Debug.Assert d.Exists(CDbl(1))
     Debug.Assert d.Exists(CDbl(#3/31/2024#))
     Debug.Assert Not d.Exists(CDbl(#3/30/2024#))
+    Debug.Assert d.Exists(PosInf)
+    Debug.Assert d.Exists(NegInf)
+    Debug.Assert d.Exists(SNaN)
+    Debug.Assert d.Exists(QNaN)
     '
     On Error Resume Next
     d.Exists Array()
     Debug.Assert Err.Number = unsupportedKeyErr
     On Error GoTo 0
 End Sub
+
+'@Description("IEEE754 +inf")
+Public Property Get PosInf() As Double
+    On Error Resume Next
+    PosInf = 1 / 0
+    On Error GoTo 0
+End Property
+'@Description("IEEE754 signaling NaN (sNaN)")
+Public Property Get SNaN() As Double
+    On Error Resume Next
+    SNaN = 0 / 0
+    On Error GoTo 0
+End Property
+'@Description("IEEE754 -inf")
+Public Property Get NegInf() As Double
+    NegInf = -PosInf
+End Property
+'@Description("IEEE754 quiet NaN (qNaN)")
+Public Property Get QNaN() As Double
+    QNaN = -SNaN
+End Property
 
 Private Sub TestDictionaryFactory()
     With New Dictionary
