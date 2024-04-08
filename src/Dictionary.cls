@@ -534,8 +534,7 @@ Private Function GetIndex(ByRef Key As Variant _
             m = hmNumber
             m_hasher.d = Key
         End If
-        'Prime 13 is low enough that there is no need to mask for overflow
-        Const n1& = 13 ^ 1, n2& = 13 ^ 2, n3& = 13 ^ 3, n4& = 13 ^ 4
+        Const n1& = 1201, n2& = 2701, n3& = 131, n4& = 28571
         With m_hasher.ia
             hVal = (.ints(0) * n4 + .ints(1) * n3 _
                   + .ints(2) * n2 + .ints(3) * n1) And HashMeta.[_maskHM] Or m
