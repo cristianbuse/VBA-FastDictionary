@@ -1,4 +1,1 @@
-*.bas eol=crlf linguist-language=VBA
-*.cls eol=crlf linguist-language=VBA
-git lfs track "*.png"
 *.png filter=lfs diff=lfs merge=lfs -text
