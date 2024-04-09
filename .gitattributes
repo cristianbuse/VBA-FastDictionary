@@ -1,3 +1,0 @@
-*.bas eol=crlf linguist-language=VBA
-*.cls eol=crlf linguist-language=VBA
-git lfs track "*.png"
