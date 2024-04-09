@@ -140,6 +140,7 @@ Const INITIAL_GROUP_COUNT As Long = 16
     Const SIGN_BIT As LongLong = &H8000000000000000^
     Const HIGH_BIT_OFF As LongLong = &H7F7F7F7F7F7F7F7F^  'Bit Off Per Each Byte
     Const HIGH_BIT_ONLY As LongLong = &H8080808080808080^
+    Const NHIGH_BIT_OFF As LongLong = HIGH_BIT_OFF Or SIGN_BIT
     Const BYTE_BROADCAST As LongLong = &H101010101010101^
     Const POSITION_PRIME As LongLong = 19
     Const VARIANT_SIZE As Long = 24
@@ -148,6 +149,7 @@ Const INITIAL_GROUP_COUNT As Long = 16
     Const PTR_SIZE As Long = 4
     Const SIGN_BIT As Long = &H80000000
     Const HIGH_BIT_OFF As Long = &H7F7F7F7F
+    Const NHIGH_BIT_OFF As Long = HIGH_BIT_OFF Or SIGN_BIT
     Const HIGH_BIT_ONLY As Long = &H80808080
     Const BYTE_BROADCAST As Long = &H1010101
     Const POSITION_PRIME As Long = 7
@@ -158,7 +160,6 @@ Const INITIAL_GROUP_COUNT As Long = 16
 #End If
 
 Const GROUP_SIZE As Long = PTR_SIZE
-Const NHIGH_BIT_OFF As LongPtr = HIGH_BIT_OFF Or SIGN_BIT
 Const INTS_IN_DOUBLE As Long = 4
 Const NOT_FOUND As Long = -1
 Const NEXT_ITEM_OFFSET As Long = PTR_SIZE * 2
