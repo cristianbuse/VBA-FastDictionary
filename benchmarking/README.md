@@ -94,12 +94,12 @@ Tim Hall's ```VBA-Dictionary```, ```VBA.Collection``` and ```Scripting.Dictionar
 
 For ```cHashD``` class we test 3 approaches:
 1) the default size of 16384 for the hash table size - which as you will see does not perform very well
-2) assuming the number of key-item pairs to add is known in advance then the hash table is sized prior to adding items with the goal of achieveing approximately 10% load
-3) assuming the number of key-item pairs to add is known in advance then the hash table is sized prior to adding items with the goal of achieveing approximately 38.5% load
+2) assuming the number of key-item pairs to add is known in advance then the hash table is sized prior to adding items with the goal of achieving approximately 10% load
+3) assuming the number of key-item pairs to add is known in advance then the hash table is sized prior to adding items with the goal of achieving approximately 38.5% load
 
 For the new Dictionary (this repo) we have 2 approaches for adding items:
 1) default rehashing - the hash table resizes when the load reaches 50%
-2) assuming the number of key-item pairs to add is known in advance then the hash table is sized prior to adding items with the goal of achieveing approximately 50% load - this is slightly faster than the default rehasing but not by much
+2) assuming the number of key-item pairs to add is known in advance then the hash table is sized prior to adding items with the goal of achieving approximately 50% load - this is slightly faster than the default rehasing but not by much
 
 ## Results
 
