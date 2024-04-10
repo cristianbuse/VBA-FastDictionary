@@ -1,7 +1,7 @@
 # VBA-FastDictionary
-Fast Native Dictionary for VBA. Compatible with Windows and Mac.
+Fast Native Dictionary for VBA. Compatible with Windows and Mac. Does not require any DLL references or any kind of external libraries.
 
-Can be used as a replacement for ```Scripting.Dictionary``` on Windows.
+Can be used as a replacement for ```Scripting.Dictionary``` on Windows. For more details see [Compatibility with Scripting.Dictionary](Implementation.md#compatibility-with-scriptingdictionary).
 
 Special thanks to [Guido](https://github.com/guwidoe) for his contribution (see [Benchmarking code](benchmarking/README.md#benchmarking-code)) and for his invaluable feedback and ideas.
 
