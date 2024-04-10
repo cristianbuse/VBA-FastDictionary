@@ -2,6 +2,20 @@
 
 This Dictionary has decent performance while compatible across all VBA platforms and applications. However, as you will see below, in most cases it is the fastest solution when compared to what is already available.
 
+## Table of Contents
+
+- [What's already available](#whats-already-available)
+  - [Pros and Cons](#pros-and-cons)
+    - [VBA.Collection](#vbacollection)
+    - [Scripting.Dictionary](#scriptingdictionary)
+    - [VBA-Dictionary](#vba-dictionary)
+    - [cHashD](#chashd)
+- [Benchmarking code](#benchmarking-code)
+- [Classes tested](#classes-tested)
+- [Results](#results)
+- [Conclusions](#conclusions)
+  - [Final thoughts](#final-thoughts)
+
 ## What's already available
 
 The following will be used for comparison:
