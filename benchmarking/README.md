@@ -88,6 +88,19 @@ The results are being written to 8 worksheets (one for each operation being meas
 
 The actual tests are in the [BenchTests.bas](src/BenchTests.bas) module and they call the main ```Benchmark``` method of the [Benchmarking.bas](src/Benchmarking.bas) module with various key inputs.
 
+## Classes tested
+
+Tim Hall's ```VBA-Dictionary```, ```VBA.Collection``` and ```Scripting.Dictionary``` are tested as-is.
+
+For ```cHashD``` class we test 3 approaches:
+1) the default size of 16384 for the hash table size - which as you will see does not perform very well
+2) assuming the number of key-item pairs to add is known in advance then the hash table is sized prior to adding items with the goal of achieveing approximately 10% load
+3) assuming the number of key-item pairs to add is known in advance then the hash table is sized prior to adding items with the goal of achieveing approximately 38.5% load
+
+For the new Dictionary (this repo) we have 2 approaches for adding items:
+1) default rehashing - the hash table resizes when the load reaches 50%
+2) assuming the number of key-item pairs to add is known in advance then the hash table is sized prior to adding items with the goal of achieveing approximately 50% load - this is slightly faster than the default rehasing but not by much
+
 ## Results
 
 All screenshots are saved under the [result_screenshots](result_screenshots) folder. The results can be reproduced by running the speed tests in the [Benchmarking.xlsm](Benchmarking.xlsm) file under the [BenchTests.bas](src/BenchTests.bas) module.
@@ -125,3 +138,17 @@ Tests:
 
 ## Conclusions
 
+- For Add-ing keys of type Object, Fractional Numbers or lenghty Strings, this Dictionary is the fastest solution for almost any number of key-item pairs. Even for shorter Strings and Integer numbers keys, this Dictionary is still the fastest for large number of key-item pairs, while for small number of pairs the difference is so insignificant that it does not justify using any other solution. Keep in mind that this Dictionary is fast even without knowing the number of pairs in advance (rehashing) while solutions like ```cHashD``` simply cannot operate decently without knowing in advance
+- For checking if a key Exists, this Dictionary is simply the best choice. Only the Scripting.Dictionary is slightly better for small number of of key-item pairs and the difference is insignificant. For cases when the keys do not exist then this Dictinary is even faster than for cases when keys exists. That's because it checks a whole group (8 keys on x64 and 4 keys on x32) in a few bitwise operations (on sub-hashes) without ever needing to compare the keys themselves
+- Retrieving Item(s) via Get or setting via Let/Set makes this Dictionary the best choice for any type of keys
+- Setting Keys to a different value is only possible for ```Scripting.Dictionary```, ```VBA-Dictionary``` and this Dictionary with the latter being the fastest choice
+- Iterating keys using a ```For Each..``` loop is only supported by ```Scripting.Dictionary``` and this Dictionary while the latter is just faster
+- This Dictionary was not optimized for Remove and so it is not the fastest in this regard, with the exception of large number of key-item pairs or lengthy text keys. However, the tradeoff is to have faster Add, Item and Exists operations
+
+### Final thoughts
+
+Although it might seem that ```Scripting.Dictionary``` is faster for up to 32k items and for specific key types, the difference is usually of microseconds or a few milliseconds when compared to this Dictionary. However, the lack of compatibility with Mac and some of the other issues mentioned (reading heap is slow for multiple instances) makes this Dictionary a better choice over ```Scripting.Dictionary```.
+
+Although it might seem that ```cHashD``` is faster for adding keys of type ```Long``` (up to a certain number of pairs) that comes with the downside of not being compatible with ```Scripting.Dictionary```. For example key ```CLng(1)``` is seen as different than ```CDbl(1)``` while ```Scripting.Dictionary``` and this repo's Dictionary 'see' them as the same number.
+
+Overall, this repo's Dictionary seems to be the best choice for any scenario, any key type, key length, platform or number of key-item pairs added.
