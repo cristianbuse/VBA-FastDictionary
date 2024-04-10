@@ -13,6 +13,9 @@ This Dictionary does not require any DLL references or any kind of external libr
 - [Hashing](#hashing)
   - [Number Hashing](#number-hashing)
   - [Object Hashing](#object-hashing)
+  - [Text Hashing on Mac](#text-hashing-on-mac)
+  - [Text Hashing on Windows](#text-hashing-on-windows)
+    - [Scripting.Dictionary.HashVal benefit](#scriptingdictionaryhashval-benefit)
 ***
 
 ## Compatibility with ```Scripting.Dictionary```
@@ -153,3 +156,47 @@ Objects pointers are well distributed anyway because:
 So, there is no need to split the pointer into smaller integers to hash. Instead a modulo prime number is used for best hash distribution. The prime value of 2701 was chosen after running speed tests for all the prime numbers up to 10k. The code is basically [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/7d58829410082f7899a6933495398868d2c56eab/src/Dictionary.cls#L516-L525).
 
 This strategy seems to yield the best results as seen [here](benchmarking/result_screenshots/add_object_(class1)_win_vba7_x64.png) or [here](benchmarking/result_screenshots/add_object_(collection)_win_vba7_x64.png).
+
+### Text Hashing on Mac
+
+On Mac, all texts are hashed by iterating each wide character (Integer) in a loop. Each char code is added to the previous hash value and the result is multiplied with a prime number. This is repeated until all characters are iterated. A bitmask is used to avoid overflow. The code is [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L492-L508). The prime number value of 131 was carefully chosen after many speed tests with different prime values.
+
+For text compare, the key is first passed to the ```VBA.LCase``` function and only then it is hashed.
+```LCase``` is fast enough on Mac that there is no need to build a [cached map for each character code](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/benchmarking/third-party_code/cHashD/modHashD.bas#L42-L52) like ```cHashD``` does.
+
+There is an integer accessor being used (same for Windows) so that reading the char codes in a ```String``` is done fast via a 'fake' array. More details on this in the [Text Hashing on Windows](#text-hashing-on-windows) section below.
+
+### Text Hashing on Windows
+
+The Mac strategy of iterating char codes is only applied for texts with length of 6 or below and for binary compare only. All other texts are hashed using the ```HashVal``` method on a fake instance of ```Scripting.Dictionary```.
+
+Why still use the Mac strategy for short texts (<7 len)? It's simply faster and this is the only reason - also explains why 7 is not an arbitrary number. Please note that for text compare the iteration strategy is not used and so no calls to ```LCase``` are being made.
+
+#### Scripting.Dictionary.HashVal benefit
+
+As mentioned above, most texts are hashed using the ```HashVal``` function on a fake Scripting.Dictionary instance. The reason is again speed. For lenghty strings it is much slower to iterate char codes (in native VBA) than to call this method. See how much better this Dictionary performs on lengthy text keys [here](benchmarking/result_screenshots/add_text_(len_40-60_text_compare_ascii)_win_vba7_x64.png) as opposed to shorter [here](benchmarking/result_screenshots/add_text_(len_5_binary_compare_unicode)_win_vba7_x64.png).
+
+This would not be needed if code could be compiled in VBA but unfortunately it cannot. It could be compiled in something like [TwinBasic](https://twinbasic.com) but then it would require all users to reference a dll file which is a big impediment for most VBA users because of distribution problems but also because some users would have IT permission difficulties.
+
+The following will describe how calling Scripting.Dictionary.HashVal is achieved with early binding without needing a reference all while avoiding the implementation issues of Scripting.Dictionary.
+
+To be continued..
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
