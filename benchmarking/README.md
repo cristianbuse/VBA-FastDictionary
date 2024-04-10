@@ -54,9 +54,9 @@ There are other classes listed in the Awesome VBA repo but those are just extens
 
 **Cons**
 - not available on Mac
-- slow for 32k+ key-item pairs - it's hash table size is fixed to 1201 (more details later below)
+- slow for 32k+ key-item pairs - it's hash table size is fixed to 1201 - see [Scripting.Dictionary Conclusions](/Implementation.md#scriptingdictionary-conclusions) for more details
 - very slow for number keys especially outside the -9,999,999 to 9,999,999 range because all numbers are casted to ```Single``` before they are hashed
-- has speed issues when multiple instances are being used - the implementation is constantly reading the compare mode and the hash size (1201) from the heap (more details later below)
+- has speed issues when multiple instances are being used - the implementation is constantly reading the compare mode and the hash size (1201) from the heap - see [Scripting.Dictionary Conclusions](/Implementation.md#scriptingdictionary-conclusions) for more details
 
 #### [VBA-Dictionary](https://github.com/VBA-tools/VBA-Dictionary)
 
