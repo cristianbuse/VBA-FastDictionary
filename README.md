@@ -19,3 +19,47 @@ In most cases, this Dictionary is the fastest solution when compared to what is 
 ## Implementation
 
 For those interested in how this Dictionary works and why some design decisions were made, please see [Implementation](Implementation.md) for more details.
+
+## Demo
+
+```VBA
+Dim d As New Dictionary
+Dim c As Collection
+Dim v As Variant
+
+d.Add "abc", 1
+d.Add "Abc", New Collection
+
+d("Abc").Add 1
+Debug.Print d.Item("abc")
+Debug.Print d.Exists("ABC") 'False
+
+d.Remove "abc"
+d.RemoveAll
+
+d.CompareMode = vbTextCompare
+d.Add "abc", 1
+Debug.Print d.Exists("ABC") 'True
+
+On Error Resume Next
+d.Add "Abc", New Collection 'Throws error 457
+Debug.Print Err.Number
+On Error GoTo 0
+
+d.Add 123, 456
+Set c = New Collection
+d.Add c, "Test"
+
+d.Item(123) = 789
+d.Key(c) = "Test"
+
+Debug.Print
+For Each v In d
+    Debug.Print v
+Next v
+
+Debug.Print
+For Each v In d.Items
+    Debug.Print v
+Next v
+```
