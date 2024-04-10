@@ -11,3 +11,7 @@ Download the latest [release](https://github.com/cristianbuse/VBA-FastDictionary
 
 Download the latest [release](https://github.com/cristianbuse/VBA-FastDictionary/releases), extract and import the ```TestDictionary.bas``` module into your project.
 Run ```RunAllDictionaryTests``` method. On failure, execution will stop on the first failed Assert.
+
+## Benchmarking
+
+In most cases, this Dictionary is the fastest solution when compared to what is already available. Please see [Benchmarking](benchmarking/README.md) for more details.
