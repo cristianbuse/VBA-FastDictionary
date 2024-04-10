@@ -15,3 +15,7 @@ Run ```RunAllDictionaryTests``` method. On failure, execution will stop on the f
 ## Benchmarking
 
 In most cases, this Dictionary is the fastest solution when compared to what is already available. Please see [Benchmarking](benchmarking/README.md) for more details.
+
+## Implementation
+
+For those interested in how this Dictionary works and why some design decisions were made, please see [Implementation](Implementation.md) for more details.
