@@ -2,13 +2,17 @@
 
 This document outlines the design decisions made in creating an efficient and robust dictionary, providing a comprehensive overview of its functionality. Please refer to the table of contents below for easy navigation to specific design decisions.
 
+This Dictionary does not require any DLL references or any kind of external libraries. Works on Mac and Windows on both x32 and x64.
+
 ## Table of Contents
 
 - [Compatibility with Scripting.Dictionary](#compatibility-with-scriptingdictionary)
-  - [Hashing Numbers](#hashing-numbers-incompatibility)
+  - [Hashing Numbers incompatibility](#hashing-numbers-incompatibility)
   - [Error numbers incompatibility](#error-numbers-incompatibility)
   - [Item (Get) incompatibility](#item-get-incompatibility)
-
+- [Hashing](#hashing)
+  - [Number Hashing](#number-hashing)
+  - [Object Hashing](#object-hashing)
 ***
 
 ## Compatibility with ```Scripting.Dictionary```
@@ -92,3 +96,60 @@ The main reason not to adhere to the same error numbers is speed. For example in
 When calling the ```Item``` (Get) property with a key that does not exist, the ```Scripting.Dictionary``` adds a new key-item pair where the key is the key that did not exist previously and the item is ```Empty```. This kind of behaviour makes sense in the ```Let``` or ```Set``` counterparts of the ```Item``` property - which is why this Dictionary emulates the same behaviour. However, for the ```Get``` property this does not make much sense. On the contrary, it's misleading. Moverover, most likely no one would ever rely on this kind of functionality considering the ```Exists``` method does not throw an error if avoiding errors is the goal.
 
 So, this Dictionary throws error 9 if ```Item``` (Get) is called with a key that is not part of the dictionary.
+
+## Hashing
+
+A few different hashing strategies were implemented in this Dictionary with the sole purpose that hashing is fast without having to worry about key data type or number of key-item pairs being added. Although more details will follow below, here are the strategies in short:
+- numbers are first casted to ```Double``` (8 bytes) and 4 primes are used to get the best hash distribution
+- objects are first casted to ```IUnknown``` so that any class instance is only added once to the dictionary i.e. cannot add the same instance as different interfaces. A prime number is used for best hash distribution - in fact it seems to outperform anything available as seen [here](benchmarking/result_screenshots/add_object_(class1)_win_vba7_x64.png)
+- on Mac, all texts are hashed by iterating each wide character (Integer) in a loop using a prime
+- on Windows, the Mac strategy is only applied for texts with length of 6 or below and for binary compare only. All other texts are hashed using the ```HashVal``` method on a fake instance of ```Scripting.Dictionary``` - with early-binding speed even though there is no dll reference
+- all hash values are combined with data type metadata and stored with the purpose of rehashing much faster. This requires that the hashes have a good spread to start with and are not reliant on the hash table size
+- sub-hash values are computed based on the hash and the current hash table size. These are the ones used to find the correct hash group/bucket and also the position within the group
+- the only place to do the hash is in the ```GetIndex``` method. This is to avoid any extra stack frames required if having a separate method
+
+### Number Hashing
+
+As mentioned above, numbers are first casted to ```Double```. See [Hashing Numbers incompatibility](#hashing-numbers-incompatibility) for details as to why this was chosen.
+
+While initially a single prime number (13) was used to hash all numbers, this was changed in [7d58829](https://github.com/cristianbuse/VBA-FastDictionary/commit/7d58829410082f7899a6933495398868d2c56eab) to 4 prime numbers. The new approach cut the time in half for hashing large integer numbers and also brought small improvements for hashing smaller integers. Both strategies were yielding same results for fractional numbers. The numbers are hashed as per [these lines](https://github.com/cristianbuse/VBA-FastDictionary/blob/7d58829410082f7899a6933495398868d2c56eab/src/Dictionary.cls#L528-L541).
+
+Quick example:
+```VBA
+Dim d As New Dictionary
+d.Add CLng(1234567890), Empty
+Debug.Assert d.Exists(CDbl(1234567890))
+Debug.Assert d.HashVal(CCur(123.456)) = d.HashVal(CDbl(123.456))
+Debug.Assert d.HashVal(CVErr(2042)) <> d.HashVal(CInt(2042)) 'Different because Errors are seen as not-numbers
+Debug.Assert d.HashVal(CDbl(CVErr(2042))) = d.HashVal(CInt(2042))
+```
+
+### Object Hashing
+
+Objects are first casted to ```IUnknown``` and then the ```IUnknown``` interface pointer is hashed. This ensures each instance is only added once to the dictionary regardless of the interface being used.
+
+Code for ```Class1```:
+```VBA
+Option Explicit
+Implements Class2 'Class2 has no code
+```
+
+Quick example:
+```VBA
+Dim d As New Dictionary
+Dim c1 As New Class1
+Dim c2 As Class2: Set c2 = c1
+
+d.Add c1, Empty
+Debug.Assert d.Exists(c1)
+Debug.Assert d.Exists(c2)
+d.Add c2, Null 'Throws error 457
+```
+
+Objects pointers are well distributed anyway because:
+- each class instance takes a certain amount of space and so even if adjacent in memory the pointers for 2 instances still have some bytes in between (not consecutive numbers)
+- class instances are stored in memory depending of where the memory allocator finds space
+
+So, there is no need to split the pointer into smaller integers to hash. Instead a modulo prime number is used for best hash distribution. The prime value of 2701 was chosen after running speed tests for all the prime numbers up to 10k. The code is basically [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/7d58829410082f7899a6933495398868d2c56eab/src/Dictionary.cls#L516-L525).
+
+This strategy seems to yield the best results as seen [here](benchmarking/result_screenshots/add_object_(class1)_win_vba7_x64.png) or [here](benchmarking/result_screenshots/add_object_(collection)_win_vba7_x64.png).
