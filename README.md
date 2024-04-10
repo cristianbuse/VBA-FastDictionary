@@ -3,6 +3,8 @@ Fast Native Dictionary for VBA. Compatible with Windows and Mac.
 
 Can be used as a replacement for ```Scripting.Dictionary``` on Windows.
 
+Special thanks to [Guido](https://github.com/guwidoe) for his contribution (see [Benchmarking code](benchmarking/README.md#benchmarking-code)) and for his invaluable feedback and ideas.
+
 ## Installation
 
 Download the latest [release](https://github.com/cristianbuse/VBA-FastDictionary/releases), extract and import the ```Dictionary.cls``` class into your project.
