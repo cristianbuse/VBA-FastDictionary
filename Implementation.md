@@ -22,7 +22,7 @@ This Dictionary does not require any DLL references or any kind of external libr
 
 ## Compatibility with ```Scripting.Dictionary```
 
-The Dictionary presented in this repository is designed to be a drop-in replacement for ```Scripting.Dictionary``` (Microsoft Scripting Runtime - scrrun.dll on Windows). However, there are a few differences and their purpose is to make this Dictionary the better choice from a functionality perspective.
+The Dictionary presented in this repository is designed to be a drop-in replacement for ```Scripting.Dictionary``` (Microsoft Scripting Runtime - scrrun.dll on Windows). However, there are a few differences, and their purpose is to make this Dictionary the better choice from a functionality perspective.
 
 ### Hashing Numbers incompatibility
 
@@ -84,7 +84,7 @@ Sub TestHashPrecision()
     sd.Add s, 2 'Throws error 457
 End Sub
 ```
-W Scripting.Dictionary would always downgrade a ```Double``` to a ```Single``` to perform the comparison. This is of course is line with how VBA behaves as seen [](https://learn.microsoft.com/en-us/office/vba/language/reference/user-interface-help/comparison-operators#remarks):
+Scripting.Dictionary would always downgrade a ```Double``` to a ```Single``` to perform the comparison. This is of course in line with how VBA behaves as seen [here](https://learn.microsoft.com/en-us/office/vba/language/reference/user-interface-help/comparison-operators#remarks):
 
 > When a Single is compared to a Double, the Double is rounded to the precision of the Single
 
@@ -94,18 +94,18 @@ However, the new Dictionary (this repo) casts ```Single``` to ```Double```. This
 
 This Dictionary only raises errors 5, 9, 450 and 457. For example Scripting.Dictionary raises error 32811 if calling ```Remove``` with a key that does not exist while this Dictionary raises error 9 (Subscript out of Range).
 
-The main reason not to ad to the same error numbers is speed. For example in the [```Item```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L666-L667) method, instead of using an extra ```If``` statement to check if the call to ```GetIndex``` returns ```NOT_FOUND```, the code simply continues and if the key was indeed missing, error 9 is raised anyway when trying to access the storage array with an invalid index. Other methods like ```Remove``` will simply return error 9 for consistency. The avoidal of the extra ```If``` statement does not impact speed for a few items but for millions of items there is a difference and speed for chosen over consistency here.
+The main reason not to adhere to the same error numbers is speed. For example in the [```Item```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L666-L667) method, instead of using an extra ```If``` statement to check if the call to ```GetIndex``` returns ```NOT_FOUND```, the code simply continues and if the key was indeed missing, error 9 is raised anyway when trying to access the storage array with an invalid index. Other methods like ```Remove``` will simply return error 9 for consistency. The omission of the extra ```If``` statement does not impact speed for a few items but for millions of items there is a difference and speed for chosen over consistency here.
 
 ### Item (Get) incompatibility
 
-When calling the ```Item``` (Get) property with a key that does not exist, the ```Scripting.Dictionary``` adds a new key-item pair where the key is the key that did not exist previously and the item is ```Empty```. This kind of behaviour makes sense in the ```Let``` or ```Set``` counterparts of the ```Item``` property - which is why this Dictionary emulates the same behaviour. However, for the ```Get``` property this does not make much sense. On the contrary, it's misleading. Moverover, most likely no one would ever rely on this kind of functionality considering the ```Exists``` method does not throw an error if avoiding errors is the goal.
+When calling the ```Item``` (Get) property with a key that does not exist, the ```Scripting.Dictionary``` adds a new key-item pair where the key is the key that did not exist previously, and the item is ```Empty```. This kind of behaviour makes sense in the ```Let``` or ```Set``` counterparts of the ```Item``` property - which is why this Dictionary emulates the same behaviour. However, for the ```Get``` property this does not make much sense. On the contrary, it's misleading. Moreover, most likely no one would ever rely on this kind of functionality considering the ```Exists``` method does not throw an error if avoiding errors is the goal.
 
 So, this Dictionary throws error 9 if ```Item``` (Get) is called with a key that is not part of the dictionary.
 
 ## Hashing
 
 A few different hashing strategies were implemented in this Dictionary with the sole purpose that hashing is fast without having to worry about key data type or number of key-item pairs being added. Although more details will follow below, here are the strategies in short:
-- numbers are first casted to ```Double``` (8 bytes) and 4 primes are used to get the best hash distribution
+- numbers are first casted to ```Double``` (8 bytes) and then 4 primes are used to get the best hash distribution
 - objects are first casted to ```IUnknown``` so that any class instance is only added once to the dictionary i.e. cannot add the same instance as different interfaces. A prime number is used for best hash distribution - in fact it seems to outperform anything available as seen [here](benchmarking/result_screenshots/add_object_(class1)_win_vba7_x64.png)
 - on Mac, all texts are hashed by iterating each wide character (Integer) in a loop using a prime
 - on Windows, the Mac strategy is only applied for texts with length of 6 or below and for binary compare only. All other texts are hashed using the ```HashVal``` method on a fake instance of ```Scripting.Dictionary``` - with early-binding speed even though there is no dll reference
@@ -153,7 +153,7 @@ d.Add c2, Null 'Throws error 457
 
 Objects pointers are well distributed anyway because:
 - each class instance takes a certain amount of space and so even if adjacent in memory the pointers for 2 instances still have some bytes in between (not consecutive numbers)
-- class instances are stored in memory depending of where the memory allocator finds space
+- class instances are stored in memory depending on where the memory allocator finds space
 
 So, there is no need to split the pointer into smaller integers to hash. Instead a modulo prime number is used for best hash distribution. The prime value of 2701 was chosen after running speed tests for all the prime numbers up to 10k. The code is basically [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/7d58829410082f7899a6933495398868d2c56eab/src/Dictionary.cls#L516-L525).
 
@@ -172,11 +172,11 @@ There is an integer accessor being used (same for Windows) so that reading the c
 
 The Mac strategy of iterating char codes is only applied for texts with length of 6 or below and for binary compare only. All other texts are hashed using the ```HashVal``` method on a fake instance of ```Scripting.Dictionary```.
 
-Why still use the Mac strategy for short texts (<7 len)? It's simply faster and this is the only reason - also explains why 7 is not an arbitrary number. Please note that for text compare the iteration strategy is not used and so no calls to ```LCase``` are being made.
+Why still use the Mac strategy for short texts (<7 length)? It's simply faster and this is the only reason - also explains why 7 is not an arbitrary number. Please note that for text compare the iteration strategy is not used and so no calls to ```LCase``` are being made.
 
 #### Scripting.Dictionary.HashVal benefit
 
-As mentioned above, most texts are hashed using the ```HashVal``` function on a fake Scripting.Dictionary instance. The reason is again speed. For lenghty strings it is much slower to iterate char codes (in native VBA) than to call this method. See how much better this Dictionary performs on lengthy text keys [here](benchmarking/result_screenshots/add_text_(len_40-60_text_compare_ascii)_win_vba7_x64.png) as opposed to shorter [here](benchmarking/result_screenshots/add_text_(len_5_binary_compare_unicode)_win_vba7_x64.png) solely because it's calling the compiled ```HashVal```.
+As mentioned above, most texts are hashed using the ```HashVal``` function on a fake Scripting.Dictionary instance. The reason is again speed. For lengthy strings it is much slower to iterate char codes (in native VBA) than to call this method. See how much better this Dictionary performs on lengthy text keys [here](benchmarking/result_screenshots/add_text_(len_40-60_text_compare_ascii)_win_vba7_x64.png) as opposed to shorter [here](benchmarking/result_screenshots/add_text_(len_5_binary_compare_unicode)_win_vba7_x64.png) solely because it's calling the compiled ```HashVal```.
 
 This would not be needed if code could be compiled in VBA but unfortunately it cannot. It could be compiled in something like [TwinBasic](https://twinbasic.com) but then it would require all users to reference a dll file which is a big impediment for most VBA users because of distribution problems but also because some users would have IT permission difficulties.
 
@@ -241,7 +241,7 @@ Sub TestScrDictLayout()
 #End If
 End Sub
 ```
-when the code stops execution on the ```Stop``` line we get something like this in the Locals window:
+when the code stops execution on the ```Stop``` line, we get something like this in the Locals window:
 ![image](https://github.com/cristianbuse/VBA-FastDictionary/assets/23198997/29877199-25ba-463e-b275-c29318cd9063)
 
 What we see is that compare mode is set to 0 or ```vbBinaryCompare``` (by default) and the hash table size is 1201. All hashes are apparently applied a ```Hash Mod 1201``` before ```HashVal``` returns:
@@ -296,11 +296,110 @@ However, if the value is not set back to the original 1201 then a crash will occ
 ##### Scripting.Dictionary Conclusions
 
 Based on the above examples, we can now conclude the following:
-- in case of a state loss, using a real Scripting.Dictionary instance for hashing would lead to a crash. Please note ```hashTablePtr``` cannot be changed as it still leads to a crash and setting it to zero is a memory leak. So, we use a fake instance - see [Faking a Scripting.Dictionary instance](#faking-a-scriptingdictionary-instance) below
+- in case of a state loss, using a real Scripting.Dictionary instance for hashing would lead to a crash, if we change the hash size to anything else than 1201. Please note ```hashTablePtr``` cannot be changed without leading to a crash, or at best, a memory leak. So, we use a fake instance - see [Faking a Scripting.Dictionary instance](#faking-a-scriptingdictionary-instance) below
 - the Scripting.Dictionary never resizes it's hash table beyond 1201 which explains the poor performance for more than 32k items even for text keys as seen [here](benchmarking/result_screenshots/add_text_(len_17-23_binary_compare_unicode)_win_vba7_x64.png). There are so many hash collisions that the linear search simply degrades performance
 - the Scripting.Dictionary always applies the ```Mod``` operator before returning a hash value and for that it must read the ```hashTableSize``` (1201 by default) from the heap. This causes real speed problems when spawning many Scripting.Dictionary instances even if each instance has only a few items. See []() below for more details
 
 #### Faking a Scripting.Dictionary instance
 
-To be continued..
+Here is a standalone method that calls Scripting.Dictionary.HashVal:
+```VBA
+Option Explicit
+
+Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
+
+Private Type ScrDictLayout
+    vTable(0 To 3) As LongPtr
+    unkPtr1 As LongPtr
+    refCount As Long
+    firstItemPtr As LongPtr
+    lastItemPtr As LongPtr
+#If Win64 = 0 Then
+    Dummy As Long
+#End If
+    hashTablePtr As LongPtr
+    hashTableSize As Long
+    compMode As Long
+    localeID As Long
+    unkPtr(0 To 1) As LongPtr
+End Type
+
+Public Function HashVal(ByRef v As Variant _
+                      , Optional ByVal compMode As VbCompareMethod = vbBinaryCompare _
+                      , Optional ByVal hashTableSize As Long = 1201) As Long
+           
+#If Mac Then
+    Err.Raise 5, , "Scripting.Dictionary not available on Mac"
+#Else
+    Const dictVTableSize As Long = 22
+    Const opNumDictHashVal As Long = 21
+    Const opNumCollItem As Long = 7
+    #If Win64 Then
+        Const PTR_SIZE As Long = 8
+        Const NULL_PTR As LongLong = 0^
+    #Else
+        Const PTR_SIZE As Long = 4
+        Const NULL_PTR As Long = 0&
+    #End If
+    '
+    Static fakeDict As Collection
+    Static vTable(0 To dictVTableSize - 1) As LongPtr
+    Static sdl As ScrDictLayout
+    Static lcid As Long
+    Static isSet As Boolean
+    '
+    If Not isSet Then
+        'Copy entire memory layout for Scripting.Dictionary instance
+        CopyMemory sdl, ByVal ObjPtr(CreateObject("Scripting.Dictionary")), LenB(sdl)
+        '
+        'Copy main virtual function table
+        CopyMemory vTable(0), ByVal sdl.vTable(0), dictVTableSize * PTR_SIZE
+        '
+        lcid = sdl.localeID
+        '
+        'Replace main virtual table with our own
+        sdl.vTable(0) = VarPtr(vTable(0))
+        '
+        'Map Collection.Item to Dictionary.HashVal
+        vTable(opNumCollItem) = vTable(opNumDictHashVal)
+        '
+        'Set up fake instance
+        CopyMemory ByVal VarPtr(fakeDict), VarPtr(sdl), PTR_SIZE
+        '
+        sdl.hashTablePtr = NULL_PTR
+        isSet = True
+    End If
+    #If Win64 Then
+        If VarType(v) = vbLongLong Then 'Check for Object with Default Property
+            If Not IsObject(v) Then
+                HashVal = fakeDict.Item(CDbl(v))
+                Exit Function
+            End If
+        End If
+    #End If
+    If compMode < vbDatabaseCompare Then
+        sdl.compMode = compMode
+        sdl.localeID = lcid
+    Else
+        sdl.compMode = vbTextCompare
+        sdl.localeID = compMode
+    End If
+    sdl.hashTableSize = hashTableSize
+    '
+    HashVal = fakeDict.Item(v) 'Dict.HashVal with early-binding speed
+#End If
+End Function
+```
+Note that ```fakeDict.Item(v)``` can be replaced with just ```fakeDict(v)``` because VBA sees the object as a ```Collection```.
+
+With the above code, calls can be made to the new ```HashVal``` method which in turn calls Scripting.Dictionary.HashVal with early-binding speed without needing a reference. For example ```Debug.Print HashVal("abc")```.
+
+There are 2 reasons why such code was not used in this repository:
+1) it would require an additional .bas module - the design goal was to have a single class with zero dependencies
+2) it adds an extra function call (stack frame) which impacts performance especially when dealing with millions of keys
+
+
+
+
+To be continued...
 
