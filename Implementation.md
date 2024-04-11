@@ -15,9 +15,10 @@ This Dictionary does not require any DLL references or any kind of external libr
   - [Object Hashing](#object-hashing)
   - [Text Hashing on Mac](#text-hashing-on-mac)
   - [Text Hashing on Windows](#text-hashing-on-windows)
-    - [Scripting.Dictionary.HashVal benefit](#scriptingdictionaryhashval-benefit)
-      - [Scripting.Dictionary Conclusions](#scriptingdictionary-conclusions)
+    - [Scripting.Dictionary.HashVal usefulness](#scriptingdictionaryhashval-usefulness)
+      - [Scripting.Dictionary conclusions](#scriptingdictionary-conclusions)
     - [Faking a Scripting.Dictionary instance](#faking-a-scriptingdictionary-instance)
+      - [Scripting.Dictionary heap issue](#scriptingdictionary-heap-issue)
 ***
 
 ## Compatibility with ```Scripting.Dictionary```
@@ -111,7 +112,7 @@ A few different hashing strategies were implemented in this Dictionary with the 
 - on Windows, the Mac strategy is only applied for texts with length of 6 or below and for binary compare only. All other texts are hashed using the ```HashVal``` method on a fake instance of ```Scripting.Dictionary``` - with early-binding speed even though there is no dll reference
 - all hash values are combined with data type metadata and stored with the purpose of rehashing much faster. This requires that the hashes have a good spread to start with and are not reliant on the hash table size
 - sub-hash values are computed based on the hash and the current hash table size. These are the ones used to find the correct hash group/bucket and also the position within the group
-- the only place to do the hash is in the ```GetIndex``` method. This is to avoid any extra stack frames required if having a separate method
+- the only place to do the hash is in the ```GetIndex``` method. This is to avoid any extra function call/stack frame required if having a separate method
 
 ### Number Hashing
 
@@ -174,7 +175,7 @@ The Mac strategy of iterating char codes is only applied for texts with length o
 
 Why still use the Mac strategy for short texts (<7 length)? It's simply faster and this is the only reason - also explains why 7 is not an arbitrary number. Please note that for text compare the iteration strategy is not used and so no calls to ```LCase``` are being made.
 
-#### Scripting.Dictionary.HashVal benefit
+#### Scripting.Dictionary.HashVal usefulness
 
 As mentioned above, most texts are hashed using the ```HashVal``` function on a fake Scripting.Dictionary instance. The reason is again speed. For lengthy strings it is much slower to iterate char codes (in native VBA) than to call this method. See how much better this Dictionary performs on lengthy text keys [here](benchmarking/result_screenshots/add_text_(len_40-60_text_compare_ascii)_win_vba7_x64.png) as opposed to shorter [here](benchmarking/result_screenshots/add_text_(len_5_binary_compare_unicode)_win_vba7_x64.png) solely because it's calling the compiled ```HashVal```.
 
@@ -293,12 +294,12 @@ We get this:
 
 However, if the value is not set back to the original 1201 then a crash will occur. That's because the ```hashTablePtr``` probably points to a table of 1201 size and when the instance is destroyed, the wrong size is being deallocated.
 
-##### Scripting.Dictionary Conclusions
+##### Scripting.Dictionary conclusions
 
 Based on the above examples, we can now conclude the following:
 - in case of a state loss, using a real Scripting.Dictionary instance for hashing would lead to a crash, if we change the hash size to anything else than 1201. Please note ```hashTablePtr``` cannot be changed without leading to a crash, or at best, a memory leak. So, we use a fake instance - see [Faking a Scripting.Dictionary instance](#faking-a-scriptingdictionary-instance) below
 - the Scripting.Dictionary never resizes it's hash table beyond 1201 which explains the poor performance for more than 32k items even for text keys as seen [here](benchmarking/result_screenshots/add_text_(len_17-23_binary_compare_unicode)_win_vba7_x64.png). There are so many hash collisions that the linear search simply degrades performance
-- the Scripting.Dictionary always applies the ```Mod``` operator before returning a hash value and for that it must read the ```hashTableSize``` (1201 by default) from the heap. This causes real speed problems when spawning many Scripting.Dictionary instances even if each instance has only a few items. See []() below for more details
+- the Scripting.Dictionary always applies the ```Mod``` operator before returning a hash value and for that it must read the ```hashTableSize``` (1201 by default) from the heap. This causes real speed problems when spawning many Scripting.Dictionary instances even if each instance has only a few items. See [Scripting.Dictionary heap issue](#scriptingdictionary-heap-issue) below for more details
 
 #### Faking a Scripting.Dictionary instance
 
@@ -397,6 +398,30 @@ With the above code, calls can be made to the new ```HashVal``` method which in 
 There are 2 reasons why such code was not used in this repository:
 1) it would require an additional .bas module - the design goal was to have a single class with zero dependencies
 2) it adds an extra function call (stack frame) which impacts performance especially when dealing with millions of keys
+
+##### Scripting.Dictionary heap issue
+
+The initial approach was to have a fake Scripting.Dictionary instance for each instance of this repo's Dictionary. However, this unveiled another Scripting.Dictionary bug which was mentioned briefly before. Luckily, while testing this Dictionary on parsing a JSON file of 12MB size which required tens of thousands of Dictionary instances, it was found that there is a serious speed impact which is only noticeable when using multiple instances. After further investigation and testing, it seems that each Scripting.Dictionary instance (real or fake) must read the hash size from the heap (and also the compare mode) for any key being hashed, and this becomes a problem for multiple instances. This was easily confirmed by moving the storage of the fake layouts into a global array of UDTs inside a standard .bas module, which immediately solved the issue and improved speed about 6-7 times.
+
+For this Dictionary, the fix was obvious - keep a single fake instance in the default ```Dictionary``` instance and access it from all the other instances. This was fixed in [2a39d61](https://github.com/cristianbuse/VBA-FastDictionary/commit/2a39d6183c4de3581d6d87794ec2dc25b3cf5dd4). Presumably, if using only one instance, the same heap location is accessed each time and there must be some caching involved because the issue does not occur.
+
+However, this cannot be fixed for Scripting.Dictionary and it now becomes clear why it is not suitable for work that involves multiple instances, like parsing a JSON.
+
+Each instance of this Dictionary uses a fake array of ```Collection``` type (one element) which is set to read the single fake Scripting.Dictionary instance from the default/predeclared Dictionary instance. Also there is a fake array of type ```Long``` (two elements) which allows each Dictionary instance to read/write compare mode and locale ID into the single fake instance. See the ```Private Type Hasher``` struct and the ```InitHasher``` method.
+
+### Rehashing and Metadata
+
+The goal for this Dictionary was to efficiently adapt the hash table size to any number of key-item pairs. To achieve this goal, the following decisions were made:
+- all hash values are stored (until key is removed or replaced). This requires that the hashes have a good distribution and do not rely on the hash table size
+- all hash values are combined with data type metadata in the upper bits of the hash so that when comparing hash values we are comparing types in the same instruction
+- sub-hash values are computed based on the full hash and the current hash table size. These are the ones used to find the correct hash group/bucket and also the position within the group
+
+There is no rehashing in the real sense of the word. Still, the method called when the hash table needs to grow is named [```Rehash```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L415-L443). The sub-hashes are the only parts being recomputed, based on the full hash, when the hash table needs to grow in size.
+
+
+
+
+
 
 
 
