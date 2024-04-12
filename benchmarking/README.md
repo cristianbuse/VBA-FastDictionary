@@ -161,8 +161,8 @@ Tests:
 
 ### Final thoughts
 
-Although it might seem that ```Scripting.Dictionary``` is faster for up to 32k items and for specific key types, the difference is usually of microseconds or a few milliseconds when compared to this Dictionary. However, the lack of compatibility with Mac and some of the other issues mentioned (reading heap is slow for multiple instances) makes this Dictionary a better choice over ```Scripting.Dictionary```.
+Although it might seem that ```Scripting.Dictionary``` is faster for up to 32k items and for specific key types, the difference is usually of microseconds or a few milliseconds when compared to this Dictionary. However, the lack of compatibility with Mac and some of the other issues mentioned ([reading heap is slow for multiple instances](/Implementation.md#scriptingdictionary-heap-issue)) makes this Dictionary a better choice over ```Scripting.Dictionary```.
 
-Although it might seem that ```cHashD``` is faster for adding keys of type ```Long``` (up to a certain number of pairs), that comes with the downside of not being compatible with ```Scripting.Dictionary```. For example key ```CLng(1)``` is seen as different than ```CDbl(1)``` while ```Scripting.Dictionary``` and this repo's Dictionary 'see' them as the same number.
+Although it might seem that ```cHashD``` is faster for adding keys of type ```Long``` (up to a certain number of pairs), that comes with the downside of not being compatible with ```Scripting.Dictionary```. For example key ```CLng(1)``` is seen as different than ```CDbl(1)``` while ```Scripting.Dictionary``` and this repo's Dictionary 'see' them as the same number. Moreover, ```cHashD``` does not perform well without knowing the number of items in advance and so the comparison is just for illustrative purposes.
 
-Overall, this repo's Dictionary seems to be the best choice for any scenario, any key type, key length, platform or number of key-item pairs added.
+Overall, the Dictionary presented in this repository seems to be the best choice for any scenario, any key type, key length, platform or number of key-item pairs added.
