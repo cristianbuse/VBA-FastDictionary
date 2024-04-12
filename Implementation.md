@@ -16,9 +16,13 @@ This Dictionary does not require any DLL references or any kind of external libr
   - [Text Hashing on Mac](#text-hashing-on-mac)
   - [Text Hashing on Windows](#text-hashing-on-windows)
     - [Scripting.Dictionary.HashVal usefulness](#scriptingdictionaryhashval-usefulness)
+    - [Scripting.Dictionary memory layout](#scriptingdictionary-memory-layout)
       - [Scripting.Dictionary conclusions](#scriptingdictionary-conclusions)
     - [Faking a Scripting.Dictionary instance](#faking-a-scriptingdictionary-instance)
       - [Scripting.Dictionary heap issue](#scriptingdictionary-heap-issue)
+- [Metadata](#metadata)
+- [Rehashing](#rehashing)
+
 ***
 
 ## Compatibility with ```Scripting.Dictionary```
@@ -105,14 +109,17 @@ So, this Dictionary throws error 9 if ```Item``` (Get) is called with a key that
 
 ## Hashing
 
-A few different hashing strategies were implemented in this Dictionary with the sole purpose that hashing is fast without having to worry about key data type or number of key-item pairs being added. Although more details will follow below, here are the strategies in short:
+A few different hashing strategies were implemented in this Dictionary with the sole purpose that hashing is fast without having to worry about key data type or number of key-item pairs being added.
+
+All hash values are stored (until key is removed or replaced). This requires that the hashes have a good distribution and do not rely on the hash table size. Thus, there is no rehashing in the real sense of the word - for more details see the [Rehashing](#rehashing) section.
+
+All hash values are combined with data type metadata in the upper bits of the hash so that when comparing hash values we are comparing types in the same instruction - for more details see [Metadata](#metadata) section.
+
+To achieve good hash distribution the following strategies were implemented:
 - numbers are first casted to ```Double``` (8 bytes) and then 4 primes are used to get the best hash distribution
 - objects are first casted to ```IUnknown``` so that any class instance is only added once to the dictionary i.e. cannot add the same instance as different interfaces. A prime number is used for best hash distribution - in fact it seems to outperform anything available as seen [here](benchmarking/result_screenshots/add_object_(class1)_win_vba7_x64.png)
 - on Mac, all texts are hashed by iterating each wide character (Integer) in a loop using a prime
 - on Windows, the Mac strategy is only applied for texts with length of 6 or below and for binary compare only. All other texts are hashed using the ```HashVal``` method on a fake instance of ```Scripting.Dictionary``` - with early-binding speed even though there is no dll reference
-- all hash values are combined with data type metadata and stored with the purpose of rehashing much faster. This requires that the hashes have a good spread to start with and are not reliant on the hash table size
-- sub-hash values are computed based on the hash and the current hash table size. These are the ones used to find the correct hash group/bucket and also the position within the group
-- the only place to do the hash is in the ```GetIndex``` method. This is to avoid any extra function call/stack frame required if having a separate method
 
 ### Number Hashing
 
@@ -164,16 +171,16 @@ This strategy seems to yield the best results as seen [here](benchmarking/result
 
 On Mac, all texts are hashed by iterating each wide character (Integer) in a loop. Each char code is added to the previous hash value and the result is multiplied with a prime number. This is repeated until all characters are iterated. A bitmask is used to avoid overflow. The code is [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L492-L508). The prime number value of 131 was carefully chosen after many speed tests with different prime values.
 
-For text compare, the key is first passed to the ```VBA.LCase``` function and only then it is hashed.
+For text compare, the key is first passed to the ```VBA.LCase``` function and then the result is hashed.
 ```LCase``` is fast enough on Mac that there is no need to build a [cached map for each character code](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/benchmarking/third-party_code/cHashD/modHashD.bas#L42-L52) like ```cHashD``` does.
 
 There is an integer accessor being used (same for Windows) so that reading the char codes in a ```String``` is done fast via a 'fake' array. More details on this in the [Text Hashing on Windows](#text-hashing-on-windows) section below.
 
 ### Text Hashing on Windows
 
-The Mac strategy of iterating char codes is only applied for texts with length of 6 or below and for binary compare only. All other texts are hashed using the ```HashVal``` method on a fake instance of ```Scripting.Dictionary```.
+The Mac strategy of iterating char codes is only applied in Windows for texts with length smaller than 7 and for binary compare only. All other texts are hashed using the ```HashVal``` method on a fake instance of ```Scripting.Dictionary```.
 
-Why still use the Mac strategy for short texts (<7 length)? It's simply faster and this is the only reason - also explains why 7 is not an arbitrary number. Please note that for text compare the iteration strategy is not used and so no calls to ```LCase``` are being made.
+The only reason why the Mac strategy for short texts (<7 length) is still used is that it's simply faster - and 7 seems to be the first length that runs faster on the fake instance. Please note that for text compare the iteration strategy is not used in Windows and so no calls to ```LCase``` are being made.
 
 #### Scripting.Dictionary.HashVal usefulness
 
@@ -391,9 +398,23 @@ Public Function HashVal(ByRef v As Variant _
 #End If
 End Function
 ```
-Note that ```fakeDict.Item(v)``` can be replaced with just ```fakeDict(v)``` because VBA sees the object as a ```Collection```.
+Note that ```fakeDict.Item(v)``` can be replaced with just ```fakeDict(v)``` because VBA "sees" the object as a ```Collection```. 
 
 With the above code, calls can be made to the new ```HashVal``` method which in turn calls Scripting.Dictionary.HashVal with early-binding speed without needing a reference. For example ```Debug.Print HashVal("abc")```.
+
+Of course, the method signature for ```Collection.Item```:  
+```
+HRESULT Item(
+             [in] VARIANT* Index, 
+             [out, retval] VARIANT* pvarRet);
+```
+perfectly matches the signature for ```Scripting.Dictionary.HashVal```:
+```
+HRESULT HashVal(
+                [in] VARIANT* Key, 
+                [out, retval] VARIANT* HashVal);
+```
+if we inspect their type libraries.
 
 There are 2 reasons why such code was not used in this repository:
 1) it would require an additional .bas module - the design goal was to have a single class with zero dependencies
@@ -409,22 +430,21 @@ However, this cannot be fixed for Scripting.Dictionary and it now becomes clear 
 
 Each instance of this Dictionary uses a fake array of ```Collection``` type (one element) which is set to read the single fake Scripting.Dictionary instance from the default/predeclared Dictionary instance. Also there is a fake array of type ```Long``` (two elements) which allows each Dictionary instance to read/write compare mode and locale ID into the single fake instance. See the ```Private Type Hasher``` struct and the ```InitHasher``` method.
 
-### Rehashing and Metadata
+## Metadata
 
-The goal for this Dictionary was to efficiently adapt the hash table size to any number of key-item pairs. To achieve this goal, the following decisions were made:
-- all hash values are stored (until key is removed or replaced). This requires that the hashes have a good distribution and do not rely on the hash table size
-- all hash values are combined with data type metadata in the upper bits of the hash so that when comparing hash values we are comparing types in the same instruction
-- sub-hash values are computed based on the full hash and the current hash table size. These are the ones used to find the correct hash group/bucket and also the position within the group
-
-There is no rehashing in the real sense of the word. Still, the method called when the hash table needs to grow is named [```Rehash```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L415-L443). The sub-hashes are the only parts being recomputed, based on the full hash, when the hash table needs to grow in size.
-
-
-
-
-
-
-
-
+As briefly mentioned in the [Hashing](#hashing) section, all hash values are combined with data type metadata in the upper bits of the hash with the goal of minimizing comparisons and ultimately being more efficient.
 
 To be continued...
 
+## Rehashing
+
+As briefly mentioned in the [Hashing](#hashing) section, there is no rehashing in the real sense of the word. Instead, all hash values are stored along with the key. Still, the method called when the hash table needs to grow is named [```Rehash```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L415-L443) because most people are familiar with the concept.
+
+By avoiding to rehash the actual keys, this Dictionary can adapt efficiently the hash table size to any number of key-item pairs. This approach required 'subhashing'
+
+
+- all hash values are combined with data type metadata in the upper bits of the hash so that when comparing hash values we are comparing types in the same instruction
+- sub-hash values are computed based on the full hash and the current hash table size. These are the ones used to find the correct hash group/bucket and also the position within the group and the only parts being recomputed, based on the full hash, when the hash table needs to grow in size.
+- the only place to do the hash is in the ```GetIndex``` method. This is to avoid any extra function call/stack frame required if having a separate method
+
+To be continued...
