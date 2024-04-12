@@ -10,6 +10,7 @@ This Dictionary does not require any DLL references or any kind of external libr
   - [Hashing Numbers incompatibility](#hashing-numbers-incompatibility)
   - [Error numbers incompatibility](#error-numbers-incompatibility)
   - [Item (Get) incompatibility](#item-get-incompatibility)
+  - [Zero-length text, 0 (zero) and Empty incompatibility](#zero-length-text-0-zero-and-empty-incompatibility)
 - [Hashing](#hashing)
   - [Number Hashing](#number-hashing)
   - [Object Hashing](#object-hashing)
@@ -109,6 +110,46 @@ The main reason not to adhere to the same error numbers is speed. For example in
 When calling the ```Item``` (Get) property with a key that does not exist, the ```Scripting.Dictionary``` adds a new key-item pair where the key is the key that did not exist previously, and the item is ```Empty```. This kind of behaviour makes sense in the ```Let``` or ```Set``` counterparts of the ```Item``` property - which is why this Dictionary emulates the same behaviour. However, for the ```Get``` property this does not make much sense. On the contrary, it's misleading. Moreover, most likely no one would ever rely on this kind of functionality considering the ```Exists``` method does not throw an error if avoiding errors is the goal.
 
 So, this Dictionary throws error 9 if ```Item``` (Get) is called with a key that is not part of the dictionary.
+
+### Zero-length text, 0 (zero) and Empty incompatibility
+
+The way Scripting.Dictionary compares these 3 values is very misleading. Consider the next code snippet:
+```VBA
+Dim d As Object: Set d = CreateObject("Scripting.Dictionary")
+
+On Error Resume Next
+
+d.Add Empty, Nothing
+Debug.Assert Err.Number = 0
+
+d.Add "", Nothing 'Not allowed because Empty exists
+Debug.Assert Err.Number = 457: Err.Clear
+
+d.Add 0, Nothing 'Not allowed because Empty exists
+Debug.Assert Err.Number = 457: Err.Clear
+
+'Dict contains Empty
+d.RemoveAll
+
+d.Add 0, Nothing
+Debug.Assert Err.Number = 0
+
+d.Add "", Nothing
+Debug.Assert Err.Number = 0
+
+'Dict contains 0 and "" keys
+d.RemoveAll
+
+On Error GoTo 0
+```
+We can see in the above code that:
+- when comparing ```Empty``` to ```""``` (or ```vbNullString```) they are considered equal
+- when comparing ```Empty``` to 0 (zero) they are considered equal
+- when comparing 0 (zero) to ```""``` (or ```vbNullString```) they are NOT considered equal
+
+This is the standard behaviour when comparing Variants in VBA, clearly outlined [here](https://learn.microsoft.com/en-us/office/vba/language/reference/user-interface-help/comparison-operators#remarks). However, for the Scripting.Dictinary this yields different results depending on the order these special values are added to the dictionary.
+
+To avoid this unfortunate and misleading behaviour, this Dictionary distinguishes between these values and allows all 3 at the same time.
 
 ## Hashing
 
@@ -440,13 +481,37 @@ Each instance of this Dictionary uses a fake array of ```Collection``` type (one
 As briefly mentioned in the [Hashing](#hashing) section, all hash values are combined with data type metadata in the upper bits of the hash with the goal of minimizing comparisons and ultimately being more efficient.
 
 The hash + meta layout is briefly shown in text at [the top of the GetIndex method](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L454-L467). Here is another representation:
-![image](https://github.com/cristianbuse/VBA-FastDictionary/assets/23198997/3afff3d4-ce42-4464-aaba-7b645fffb389)
+![image](https://github.com/cristianbuse/VBA-FastDictionary/assets/23198997/abd41e6e-7c69-4b5c-853e-562ced91b086)
 
-With this chosen layout, hash values of up to 268,435,456 (0x10000000) can be stored, while the upper 3 bits store metadata about the type. All number data types are combined into a single type for compatibility with Scripting.Dictionary.
+With this chosen layout, hash values of up to 268,435,456 (0x10000000) can be stored (28 bits), while the next upper 3 bits store metadata about the type. All number data types are combined into a single type for compatibility with Scripting.Dictionary. Similarly, ```vbDataObject``` is combined with ```vbObject``` as per below:
 
-The sign bit is not used on x32 because there is separate storage available - see [NewEnum](#newenum) section for more details. However, on x64 the sign bit is used if the Item is an object. This removes the need to have separate storage - the idea is to avoid calling ```IsObject``` repeatedly.
+| Key Var Type | Meta Type |
+| --- | --- |
+| vbEmpty | Empty |
+| vbNull | Null |
+| vbInteger | Number |
+| vbLong | Number |
+| vbSingle | Number |
+| vbDouble | Number |
+| vbCurrency | Number |
+| vbDate | Number |
+| vbString | Text |
+| vbObject | Object |
+| vbError | Error |
+| vbBoolean | Number |
+| vbDataObject | Object |
+| vbDecimal | Number |
+| vbByte | Number |
+| vbLongLong | Number |
 
-To be continued...
+The sign bit is not used on x32 because there is separate storage available - see [NewEnum](#newenum) section for more details. However, on x64 the sign bit is used if the Item is an object. This removes the need to have separate storage - the idea is to avoid calling ```IsObject``` repeatedly when the item is retrieved.
+
+For example, if a number key and a text key happen to have the same hash value of 21, when comparing the 2 hashes, they won't be the same thanks to the extra meta bits:
+![image](https://github.com/cristianbuse/VBA-FastDictionary/assets/23198997/353edac3-0c5e-4b50-826b-8f697408bb35)
+
+When searching the hash table for a key that was just hashed, we first compare the hash + meta values and only if they are equal, we then compare the actual values. This avoids unnecessary comparisons which are especially slow for texts. In fact, before we even compare the hash + meta values, we first compare a sub-hash called "control byte" but that is described in more detail in the [Hash Map/Table](#hash-maptable) section below.
+
+The meta values are defined in the [HashMeta](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L209-L217) enum. There is also a special value ```hmRemove``` used to mark items/keys that have been removed.
 
 ## Hash Map/Table
 
@@ -464,7 +529,7 @@ To be continued...
 
 As briefly mentioned in the [Hashing](#hashing) section, there is no rehashing in the real sense of the word. Instead, all hash values are stored along with the key. Still, the method called when the hash table needs to grow is named [```Rehash```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L415-L443) because most people are familiar with the concept.
 
-By avoiding to rehash the actual keys, this Dictionary can adapt efficiently the hash table size to any number of key-item pairs. This approach required 'subhashing'
+By avoiding rehashing the actual keys, this Dictionary can adapt efficiently the hash table size to any number of key-item pairs. This approach required 'subhashing'
 
 Sub-hash values are re-computed based on the full hash and the new hash table size, when the hash table needs to grow in size.
 
