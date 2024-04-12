@@ -21,7 +21,10 @@ This Dictionary does not require any DLL references or any kind of external libr
     - [Faking a Scripting.Dictionary instance](#faking-a-scriptingdictionary-instance)
       - [Scripting.Dictionary heap issue](#scriptingdictionary-heap-issue)
 - [Metadata](#metadata)
+- [Hash Map/Table](#hash-maptable)
+  - [Sub-hashing](#sub-hashing)
 - [Rehashing](#rehashing)
+- [NewEnum](#newenum)
 
 ***
 
@@ -114,6 +117,8 @@ A few different hashing strategies were implemented in this Dictionary with the 
 All hash values are stored (until key is removed or replaced). This requires that the hashes have a good distribution and do not rely on the hash table size. Thus, there is no rehashing in the real sense of the word - for more details see the [Rehashing](#rehashing) section.
 
 All hash values are combined with data type metadata in the upper bits of the hash so that when comparing hash values we are comparing types in the same instruction - for more details see [Metadata](#metadata) section.
+
+All hash values are calculated in the ```GetIndex``` method. This is to avoid any extra function call/stack frame required if having a separate method.
 
 To achieve good hash distribution the following strategies were implemented:
 - numbers are first casted to ```Double``` (8 bytes) and then 4 primes are used to get the best hash distribution
@@ -428,11 +433,30 @@ For this Dictionary, the fix was obvious - keep a single fake instance in the de
 
 However, this cannot be fixed for Scripting.Dictionary and it now becomes clear why it is not suitable for work that involves multiple instances, like parsing a JSON.
 
-Each instance of this Dictionary uses a fake array of ```Collection``` type (one element) which is set to read the single fake Scripting.Dictionary instance from the default/predeclared Dictionary instance. Also there is a fake array of type ```Long``` (two elements) which allows each Dictionary instance to read/write compare mode and locale ID into the single fake instance. See the ```Private Type Hasher``` struct and the ```InitHasher``` method.
+Each instance of this Dictionary uses a fake array of ```Collection``` type (one element) which is set to read the single fake Scripting.Dictionary instance from the default/predeclared Dictionary instance. Also there is a fake array of type ```Long``` (two elements) which allows each Dictionary instance to read/write compare mode and locale ID into the single fake instance. See the [```Private Type Hasher```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L267-L281) struct and the [```InitHasher```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L1096-L1169) method.
 
 ## Metadata
 
 As briefly mentioned in the [Hashing](#hashing) section, all hash values are combined with data type metadata in the upper bits of the hash with the goal of minimizing comparisons and ultimately being more efficient.
+
+The hash + meta layout is briefly shown in text at [the top of the GetIndex method](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L454-L467). Here is another representation:
+![image](https://github.com/cristianbuse/VBA-FastDictionary/assets/23198997/3afff3d4-ce42-4464-aaba-7b645fffb389)
+
+With this chosen layout, hash values of up to 268,435,456 (0x10000000) can be stored, while the upper 3 bits store metadata about the type. All number data types are combined into a single type for compatibility with Scripting.Dictionary.
+
+The sign bit is not used on x32 because there is separate storage available - see [NewEnum](#newenum) section for more details. However, on x64 the sign bit is used if the Item is an object. This removes the need to have separate storage - the idea is to avoid calling ```IsObject``` repeatedly.
+
+To be continued...
+
+## Hash Map/Table
+
+To be continued...
+
+### Sub-hashing
+
+There are 2 sub-hash values being used:
+1) to find the correct hash group/bucket
+2) to find the position within the group/bucket
 
 To be continued...
 
@@ -442,9 +466,10 @@ As briefly mentioned in the [Hashing](#hashing) section, there is no rehashing i
 
 By avoiding to rehash the actual keys, this Dictionary can adapt efficiently the hash table size to any number of key-item pairs. This approach required 'subhashing'
 
+Sub-hash values are re-computed based on the full hash and the new hash table size, when the hash table needs to grow in size.
 
-- all hash values are combined with data type metadata in the upper bits of the hash so that when comparing hash values we are comparing types in the same instruction
-- sub-hash values are computed based on the full hash and the current hash table size. These are the ones used to find the correct hash group/bucket and also the position within the group and the only parts being recomputed, based on the full hash, when the hash table needs to grow in size.
-- the only place to do the hash is in the ```GetIndex``` method. This is to avoid any extra function call/stack frame required if having a separate method
+To be continued...
+
+## NewEnum
 
 To be continued...
