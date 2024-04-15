@@ -26,6 +26,7 @@ This Dictionary does not require any DLL references or any kind of external libr
   - [Sub-hashing](#sub-hashing)
   - [Finding a key](#finding-a-key)
   - [Adding a key](#adding-a-key)
+  - [Hash Map final notes](#hash-map-final-notes)
 - [Rehashing](#rehashing)
 - [NewEnum](#newenum)
 
@@ -555,7 +556,10 @@ Before adding a key, the steps in the [Finding a key](#finding-a-key) section ar
 When adding the Key-Item (and hash+meta) pair to the data storage, in the group indicated by the group sub-hash, the following operations are performed:
 - the index for the data is added in the first available position within the group
 - the corresponding byte in the control integer is updated with the value of the control sub-hash so that it can be used later for fast find
+
 Code [here](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L371-L376).
+
+When adding a new key, the new corresponding index is added to the hash table, and so, there is a chance that the group sub-hash indicates a group that is full. As mentioned above, this is taken care of in the finding process (by incrementing the group slot value), and we always end up adding the new index into a bucket that has available space. Since hashes are not going to have perfect distribution, a new index can be added a few groups/buckets away from the intended position. This is why we track if the group was ever full via a boolean flag. The search for a key will always be done until the first group that was never empty is found. The nice benefit is that we can achieve a higher load factor without needing to resize individual groups/buckets. The current max load is set to 50% which seems to provide a good balance between storage and performance.
 
 ## Rehashing
 
