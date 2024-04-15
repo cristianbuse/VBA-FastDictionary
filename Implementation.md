@@ -24,6 +24,8 @@ This Dictionary does not require any DLL references or any kind of external libr
 - [Metadata](#metadata)
 - [Hash Map/Table](#hash-maptable)
   - [Sub-hashing](#sub-hashing)
+  - [Finding a key](#finding-a-key)
+  - [Adding a key](#adding-a-key)
 - [Rehashing](#rehashing)
 - [NewEnum](#newenum)
 
@@ -103,7 +105,7 @@ However, the new Dictionary (this repo) casts ```Single``` to ```Double```. This
 
 This Dictionary only raises errors 5, 9, 450 and 457. For example Scripting.Dictionary raises error 32811 if calling ```Remove``` with a key that does not exist while this Dictionary raises error 9 (Subscript out of Range).
 
-The main reason not to adhere to the same error numbers is speed. For example in the [```Item```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L666-L667) method, instead of using an extra ```If``` statement to check if the call to ```GetIndex``` returns ```NOT_FOUND```, the code simply continues and if the key was indeed missing, error 9 is raised anyway when trying to access the storage array with an invalid index. Other methods like ```Remove``` will simply return error 9 for consistency. The omission of the extra ```If``` statement does not impact speed for a few items but for millions of items there is a difference and speed for chosen over consistency here.
+The main reason not to adhere to the same error numbers is speed. For example in the [```Item```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L666-L667) method, instead of using an extra ```If``` statement to check if the call to ```GetIndex``` returns ```NOT_FOUND```, the code simply continues and if the key was indeed missing, error 9 is raised anyway when trying to access the storage array with an invalid index. Other methods like ```Remove``` will simply return error 9 for consistency. The omission of the extra ```If``` statement does not impact speed for a few items but for millions of items there is a difference and speed was chosen over consistency here.
 
 ### Item (Get) incompatibility
 
@@ -515,15 +517,45 @@ The meta values are defined in the [HashMeta](https://github.com/cristianbuse/VB
 
 ## Hash Map/Table
 
-To be continued...
+After watching the [Designing a Fast, Efficient, Cache-friendly Hash Table, Step by Step](https://www.youtube.com/watch?v=ncHmEUmJZf4) video on YouTube, presented by Matt Kulukundis, the idea of using SSE instructions to compare multiple sub-hashes in a set of just 3 instructions sounded great. Since we cannot natively use SSE instructions in VBA, this Dictionary uses the next best thing - bitwise operations.
+
+The structure looks like [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L171-L184). In short:
+- the hash map/table is divided in groups (buckets) of fixed size
+- each group can hold 4 (x32) or 8 (x64) elements of ```Long``` data type - which will store indexes into the keys/meta storage. This is an array fixed in size at compile time
+- each group has an integer "Control" value which is either ```Long``` (x32) or ```LongLong``` (x64) to allow for bitwise operations. Each byte in the control corresponds to one element/index in the group's array. To avoid overflow problems, only the lower 7 bits in each byte are used. Each 7 bits in a control byte are in fact sub-hash values corresponding to the hash of each key pointed by the indexes in the group's array.
+
+The following diagram illustrates the above:
+![image](https://github.com/cristianbuse/VBA-FastDictionary/assets/23198997/9e348182-1f5b-4871-8127-5866a8be7c05)
 
 ### Sub-hashing
 
-There are 2 sub-hash values being used:
-1) to find the correct hash group/bucket
-2) to find the position within the group/bucket
+When a key is hashed, the following sub-hashes are computed, in the [GetIndex](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L548-L604) method:
+- lower bits in the hash value are used to identify the group slot. The number of bits used depends on the number of groups (table size). A modulo operator is applied to compute this sub-hash. These are the 'pink' bits in the above diagram
+- the next 7 bits in the hash value are the control byte. To compute this sub-hash, a bit mask and a right-shift is applied. These are the 'red' bits in the above diagram
 
-To be continued...
+### Finding a key
+
+If a key needs to be found, then the steps are the following:
+- the full hash+meta is computed and then the 2 sub-hashes
+- the group slot sub-hash indicates the group/bucket to search in
+- within the group, the control sub-hash byte is checked against the group's control integer using [these](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L556-L561) bitwise operations. This will find all matching positions within the group
+- for each matching position, the full hash+meta value is compared
+- if the full hashes match, then the actual keys are compared
+- the search will continue until a match is found or until a group that was never full is encountered. Please note that during this process the group sub-hash is being incremented
+
+Please note that by comparing sub-hashes and/or hashes minimizes the number of key comparisons, and this greatly improves performance.
+
+### Adding a key
+
+Before adding a key, the steps in the [Finding a key](#finding-a-key) section are always ran first - to avoid key duplication. So, when adding a key, we already have computed:
+- the full hash
+- the group sub-hash. Note this will always indicate a group that has available space because this value is incremented in the finding process i.e. it might not correspond with the actual bits in the full hash
+- the control byte sub-hash
+
+When adding the Key-Item (and hash+meta) pair to the data storage, in the group indicated by the group sub-hash, the following operations are performed:
+- the index for the data is added in the first available position within the group
+- the corresponding byte in the control integer is updated with the value of the control sub-hash so that it can be used later for fast find
+Code [here](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L371-L376).
 
 ## Rehashing
 
