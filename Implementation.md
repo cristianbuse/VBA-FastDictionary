@@ -26,7 +26,6 @@ This Dictionary does not require any DLL references or any kind of external libr
   - [Sub-hashing](#sub-hashing)
   - [Finding a key](#finding-a-key)
   - [Adding a key](#adding-a-key)
-  - [Hash Map final notes](#hash-map-final-notes)
 - [Rehashing](#rehashing)
 - [NewEnum](#newenum)
 
@@ -565,11 +564,11 @@ When adding a new key, the new corresponding index is added to the hash table, a
 
 As briefly mentioned in the [Hashing](#hashing) section, there is no rehashing in the real sense of the word. Instead, all hash values are stored along with the key. Still, the method called when the hash table needs to grow is named [```Rehash```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L415-L443) because most people are familiar with the concept.
 
-By avoiding rehashing the actual keys, this Dictionary can adapt efficiently the hash table size to any number of key-item pairs. This approach required 'subhashing'
+By avoiding rehashing the actual keys, this Dictionary can adapt efficiently the hash table size to any number of key-item pairs.
 
-Sub-hash values are re-computed based on the full hash and the new hash table size, when the hash table needs to grow in size.
+Of course, sub-hash values are re-computed based on the full hash and the new hash table size, when the hash table needs to grow in size. However, these operations are fast (modulo and bit-shifts) and we end up having a hash map resize with a small penalty in performance.
 
-To be continued...
+If key-item pairs are removed from the dictionary, then some of the groups in the hash table might remain with unused positions because the ```Add``` process only checks the ```WasEverFull``` flag. Please note this is not a problem for the ```Key``` method which always checks for ```.Count = GROUP_SIZE```. The idea is that a call to ```Rehash``` will actually fix the unused postions and obviously, adding items can easily lead to a resize. Meanwhile, ```Key``` (Let) will not lead to a resize and so the logic is different to avoid endlessly searching for a group slot.
 
 ## NewEnum
 
