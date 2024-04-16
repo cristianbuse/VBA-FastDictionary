@@ -611,6 +611,8 @@ So, we could create an array of such type instead of an array of ```Variant``` a
 
 ### x64 implementation
 
+Many thanks to [sancarn](https://github.com/sancarn) for his help on figuring out VT_RECORD (vbUserDefined).
+
 As mentioned above, we need the following structure:
 | Variant | Unused Pointer | Unused pointer | Next Item Pointer |
 | ------- | -------------- | -------------- | ----------------- |
