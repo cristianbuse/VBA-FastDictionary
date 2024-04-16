@@ -28,6 +28,9 @@ This Dictionary does not require any DLL references or any kind of external libr
   - [Adding a key](#adding-a-key)
 - [Rehashing](#rehashing)
 - [NewEnum](#newenum)
+  - [x64 implementation](#x64-implementation)
+  - [x32 implementation](#x64-implementation)
+  - [Enumerator management](#enumerator-management)
 
 ***
 
@@ -572,4 +575,98 @@ If key-item pairs are removed from the dictionary, then some of the groups in th
 
 ## NewEnum
 
-To be continued...
+To enable a ```For Each..``` loop on a class instance in VBA, the instance class must have a defined public method with the special attribute ```Attribute NewEnum.VB_UserMemId = -4``` where ```NewEnum``` is the method name. That method must return an instance that implements the ```IEnumVariant``` interface and VBA will make calls to ```IEnumVARIANT::Next``` until all items are iterated. ```-4``` is simply the ```dispIdMember``` that [```IDispatch::Invoke```](https://learn.microsoft.com/en-us/windows/win32/api/oaidl/nf-oaidl-idispatch-invoke) uses to call the method (late-bind call).
+
+Unfortunately, we cannot create a class enumerator (```IEnumVariant```) with native code in VBA. Other developers have tried using assembly injected at runtime - for example [clsTrickHashTable](https://www.vbforums.com/showthread.php?788247-VB6-Hash-table). However, there is no solution available for all platforms and even the ones available often lead to crashes.
+
+A few alternatives were explored in [this](https://codereview.stackexchange.com/questions/287926/iterate-internal-array-for-a-vba-class) Code Review article. In short:
+1) we can hijack calls to ```IEnumVARIANT::Next``` on a fake instance and use our own method inside a standard .bas module. This can be done in multiple ways; however, it is too slow (extra stack frames) compared to what a Scripting.Dictionary or a VBA.Collection can do. Moreover, this approach adds a module dependency
+2) we can use instances of ```IEnumVARIANT``` as returned by a temporary ```Collection```. If we can make our data structure mimic the items in a Collection's linked list, then the same code that iterates collection items can iterate our own data
+
+This Dictionary uses approach #2 mentioned above but implemented differently for 32-bit and 64-bit versions of VBA.
+
+A Collection item looks like this:
+```VBA
+Private Type VbCollectionItem
+    Data                As Variant
+    KeyPtr              As LongPtr
+    pPrevIndexedItem    As LongPtr
+    pNextIndexedItem    As LongPtr
+    pParentItem         As LongPtr
+    pRightBranch        As LongPtr
+    pLeftBranch         As LongPtr
+    bFlag               As Boolean
+End Type
+```
+This is well detailed on VB Forums or [here](https://gist.github.com/wqweto/39822f4fb7090fa086aeff1e2e06e630).
+
+As described in the Code Review article linked above, we only really need the following structure:
+
+| Variant | Unused Pointer | Unused pointer | Next Item Pointer |
+| ------- | -------------- | -------------- | ----------------- |
+
+In short, just the first 4 members of a real Collection item.
+
+So, we could create an array of such type instead of an array of ```Variant``` and we then make sure the Next Pointer always links to the next ```Variant```. In fact this is the exact approach used for this Dictionary but for x32 only. For x64 there is a better approach which is less wasteful.
+
+### x64 implementation
+
+As mentioned above, we need the following structure:
+| Variant | Unused Pointer | Unused pointer | Next Item Pointer |
+| ------- | -------------- | -------------- | ----------------- |
+
+Here is a more useful diagram:  
+![image](https://github.com/cristianbuse/VBA-FastDictionary/assets/23198997/815662ff-402d-4070-8048-8e4717521cc2)
+
+We can see on the left side of the diagram that:
+- a ```Variant``` uses 24 Bytes on x64. The last 8 Bytes are only used for User Defined Types (UDTs). Keys in the Dictionary cannot be UDTs and so the 8 Bytes are not used
+- we are wasting 16 Bytes with unused pointers just to have the Next Pointer at the correct offset
+
+In total, 24 Bytes are not used - the exact size of a ```Variant```.
+
+We can see on the right side of the diagram that:
+- we can make use of the 8 unused Bytes in a ```Variant``` and use them for the Next Pointer
+- the Next Pointer for Variant at position n would sit in the last Bytes of the Variant at position n+1
+
+In total, we are using all Bytes. Moreover, we don't need a custom structure - we can just continue using an array of ```Variant``` type.
+
+The code that updates the Next Pointers looks like [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L1248-L1267)
+
+There is an additional benefit - we can still return the keys array via the ```Keys``` method, without having to iterate the keys, if there are no gaps in the array. See [code](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L825-L827).
+
+### x32 implementation
+
+Unfortunately, we cannot apply the same strategy used for x64. This is because pointers are only 4 Bytes (```Long``` data type) on x32, and the Next Pointer would not have the correct offset. Moreover, the last bytes in a ```Variant``` are used - for example, a ```Double``` would use 8 Bytes.
+
+So, we must use the following custom structure:
+| Variant | Unused Pointer | Unused pointer | Next Item Pointer |
+| ------- | -------------- | -------------- | ----------------- |
+
+However, we can make use of the space between the Variant and the Next Pointer (Extra information):
+![image](https://github.com/cristianbuse/VBA-FastDictionary/assets/23198997/e20e1594-b994-4dbb-b752-9dc84f25e130)
+
+[Here](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L186-L207) is how the custom type looks like, and [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L1269-L1284) is the code that updates the Next Pointers.
+
+Although, the ```Keys``` method [has to iterate the keys](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L843-L852) in order to return the keys array, this is not a big drawback because:
+- ```Items``` method is not affected
+- ```For Each``` can be used on the Dictionary instance directly (```For Each v In dict```) which is anyway faster than iterating the keys array (```For Each v In dict.Keys```)
+
+Using the ```EnumerableVariant``` structure for storing keys brings additional benefits:
+- there is no need to have a ```Meta``` array, like we have on x64 to store the hash+meta values
+- there is no need to use bitmasks to check if item or key is an object, like we have on x64
+
+Compared to not implementing this functionality, there are only 8 extra Bytes being used per Variant: 4 for the Next Pointer and 4 for the 2 Boolean flags (is Item/Key Object). That's because the hash+meta uses 4 Bytes regardless. While the 2 Boolean flags are slightly faster than using bitmasks, the speed difference is negligeable. Overall, having the iterator functionality trumps the need for the additional space.
+
+### Enumerator management
+
+When using the class iterator described above, there are a few scenarios that we need to consider:
+- a ```For Each``` loop can be called inside an existing ```For Each``` loop
+- items/keys can be added/removed while inside of a ```For Each``` loop. This can lead to a [re-allocation of the data](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L341-L358)
+- ```NewEnum``` can be called and stored to be used at a later stage
+
+To account for all the scenarios above, this Dictionary has additional management in the [```RemoveUnusedEnums```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L1290-L1312) and [```ShiftEnumPointer```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L1314-L1356) methods.
+
+
+
+
+
