@@ -510,10 +510,23 @@ Public Sub Benchmark(ByRef keysToAdd() As Variant _
         iterations = iterations * 2
         itemLevel = itemLevel + 1
     Loop
-    ThisWorkbook.Save 'To avoid freezing when deallocating test data
+    #If Win64 = 0 Then
+        For k = opAdd To opRemove
+            With arrRes(k)
+                For i = itemLevel To .Rows.Count
+                    .Cells(i, 1).Value2 = 2 ^ (i - 1)
+                    For j = 2 To .Columns.Count
+                        .Cells(i, j).Value2 = "out of memory"
+                        DoEvents
+                    Next j
+                Next i
+            End With
+        Next k
+    #End If
+    ThisWorkbook.Save  'To avoid freezing when deallocating test data
 End Sub
 
-Private Function VBInfo() As String
+Public Function VBInfo() As String
     Dim res(0 To 2) As String
     #If Mac Then
         res(0) = "Mac"

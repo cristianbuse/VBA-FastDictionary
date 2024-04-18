@@ -1,7 +1,11 @@
 Attribute VB_Name = "BenchTests"
 Option Explicit
 
-Private Const size As Long = 2 ^ 24
+#If Win64 Then
+    Private Const size As Long = 2 ^ 24
+#Else
+    Private Const size As Long = 2 ^ 22 'To avoid 'out of memory' issues
+#End If
 
 'This module uses the excellent 'LibStringTools' module found at:
 'https://github.com/guwidoe/VBA-StringTools
