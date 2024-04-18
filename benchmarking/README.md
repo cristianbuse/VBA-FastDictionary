@@ -69,7 +69,7 @@ This is a class that wraps around Scripting.Dictionary on Windows and uses a com
 **Cons**
 - slower on Windows because it uses late-binding for the internal Scripting.Dictionary
 - very slow on Mac because of the strategy used
-- has serious bugs. For example, on Mac, an integer key of value ```2``` is considered equal to a text key of value ```2__2``` while in text comparison mode. The same happens on Windows if the compiler constant ```UseScriptingDictionaryIfAvailable``` is set to ```False```
+- has serious bugs. For example, on Mac, an integer key of value ```2``` is considered equal to a text key of value ```2__2``` while in text comparison mode. The same happens on Windows if the compiler constant ```UseScriptingDictionaryIfAvailable``` is set to ```False```. Another example, it raises an error for a ```Null``` key. Another example is that it sees the key ```#3/31/2024#``` as different from ```CDbl(#3/31/2024#)```. Another example is that in ```dict_RemoveKeyValue``` the last line is a call to ```dict_RemoveObjectKey``` even if the key being removed is not an Object which raises an error. And the list continues
 - inherits all the cons of Scripting.Dictionary
 
 #### [cHashD](https://www.vbforums.com/showthread.php?834515-Simple-and-fast-lightweight-HashList-Class-(no-APIs))
