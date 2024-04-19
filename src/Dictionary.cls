@@ -320,9 +320,11 @@ Private Sub Init(Optional ByVal newGroupCount As Long = INITIAL_GROUP_COUNT)
     m_data.UsedCount = 0
     m_isUnordered = False
     ReDim m_data.Items(0 To 0)
-    ReDim m_data.Keys(0 To 0)
 #If Win64 Then
+    ReDim m_data.Keys(0 To 1) 'Extra member for safe IEnumVariant
     ReDim m_data.Meta(0 To 0)
+#Else
+    ReDim m_data.Keys(0 To 0)
 #End If
     If Not m_hasher.isSet Then
         InitLookups
