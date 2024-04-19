@@ -366,6 +366,12 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
              groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
         Loop
         controlByte = (hVal And m_hash.ControlMask) \ m_hash.GroupCount
+    ElseIf m_hash.Groups(groupSlot).Count = GROUP_SIZE Then
+        'This can only happen if ClearMapIndex was previously called
+        groupSlot = hVal Mod m_hash.GroupCount
+        Do While m_hash.Groups(groupSlot).Count = GROUP_SIZE
+             groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
+        Loop
     End If
     '
     With m_hash.Groups(groupSlot)
@@ -551,6 +557,7 @@ Private Function GetIndex(ByRef Key As Variant _
     '
     Dim matches As LongPtr
     Dim cMask As LongPtr
+    Dim startSlot As Long: startSlot = groupSlot
     Do
         With m_hash.Groups(groupSlot)
             cMask = m_lookups.CountMask(.Count)
@@ -600,6 +607,7 @@ Private Function GetIndex(ByRef Key As Variant _
             If Not .WasEverFull Then Exit Do
         End With
         groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
+        If groupSlot = startSlot Then Exit Do 'Avoid infinite loop
     Loop
     GetIndex = NOT_FOUND
 End Function
