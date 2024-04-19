@@ -118,21 +118,33 @@ Public Sub Benchmark(ByRef keysToAdd() As Variant _
                         Next i
                         elapsed(j, opItemGet) = Round(AccurateTimerUs - elapsed(j, opItemGet), 0)
                         '
+                        #If Mac Then
+                            On Error Resume Next 'To avoid implementation bugs
+                        #End If
                         elapsed(j, opItemLet) = AccurateTimerUs
                         For i = 1 To iterations
                             vdict.Item(keysToAdd(i)) = i
                         Next i
                         elapsed(j, opItemLet) = Round(AccurateTimerUs - elapsed(j, opItemLet), 0)
+                        #If Mac Then
+                            On Error GoTo 0
+                        #End If
                         '
                         If IsNumeric(prevElapsed(j, opKeyLet)) Then
                             If prevElapsed(j, opKeyLet) > thirtySecondsU Then
                                 elapsed(j, opKeyLet) = "'Key(Let)' slow"
                             Else
+                                #If Mac Then
+                                    On Error Resume Next 'To avoid implementation bugs
+                                #End If
                                 elapsed(j, opKeyLet) = AccurateTimerUs
                                 For i = 1 To iterations
                                     vdict.Key(keysToAdd(i)) = keysMissing(i)
                                 Next i
                                 elapsed(j, opKeyLet) = Round(AccurateTimerUs - elapsed(j, opKeyLet), 0)
+                                #If Mac Then
+                                    On Error GoTo 0
+                                #End If
                             End If
                         Else
                             elapsed(j, opKeyLet) = prevElapsed(j, opKeyLet)
@@ -144,11 +156,17 @@ Public Sub Benchmark(ByRef keysToAdd() As Variant _
                             If prevElapsed(j, opRemove) > thirtySecondsU Then
                                 elapsed(j, opRemove) = "'Remove' slow"
                             Else
+                                #If Mac Then
+                                    On Error Resume Next 'To avoid implementation bugs
+                                #End If
                                 elapsed(j, opRemove) = AccurateTimerUs
                                 For i = 1 To iterations
                                     vdict.Remove keysMissing(i)
                                 Next i
                                 elapsed(j, opRemove) = Round(AccurateTimerUs - elapsed(j, opRemove), 0)
+                                #If Mac Then
+                                    On Error GoTo 0
+                                #End If
                             End If
                         Else
                             elapsed(j, opRemove) = prevElapsed(j, opRemove)
