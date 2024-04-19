@@ -298,7 +298,8 @@ End Type
 
 Private Type EnumProvider
     hasEnum As Boolean
-    coll As New Collection
+    emptyColl As New Collection
+    enumsColl As New Collection
     pa As PointerAccessor
 End Type
 
@@ -327,7 +328,8 @@ Private Sub Init(Optional ByVal newGroupCount As Long = INITIAL_GROUP_COUNT)
         InitLookups
         InitLocalHasher
     End If
-    Set m_enumProvider.coll = Nothing 'Clears NextPtr in all live IEnumVariant's
+    Set m_enumProvider.emptyColl = Nothing 'Clear NextPtr in live IEnumVariant's
+    Set m_enumProvider.enumsColl = Nothing
     m_enumProvider.hasEnum = False
 End Sub
 
@@ -1254,9 +1256,9 @@ Attribute NewEnum.VB_UserMemId = -4
     With m_enumProvider
         hadEnum = .hasEnum
         If .hasEnum Then RemoveUnusedEnums
-        Set NewEnum = .coll.[_NewEnum]
+        Set NewEnum = .emptyColl.[_NewEnum]
         .hasEnum = True
-        .coll.Add NewEnum, CStr(ObjPtr(NewEnum))
+        .enumsColl.Add NewEnum, CStr(ObjPtr(NewEnum))
         If Not .pa.isSet Then Dictionary.InitPointerAccessor .pa
     End With
     If m_data.UsedCount = 0 Then Exit Function
@@ -1328,21 +1330,21 @@ Private Sub RemoveUnusedEnums(Optional ByVal searchPtr As LongPtr _
                             , Optional ByVal replacePtr As LongPtr)
     Dim e As Variant 'IEnumVARIANT does not work with For Each
     With m_enumProvider
-        For Each e In .coll
+        For Each e In .enumsColl
             Dim ptr As LongPtr: ptr = ObjPtr(e)
             .pa.sa.pvData = ptr + NEXT_ITEM_OFFSET
             .pa.sa.rgsabound0.cElements = 1
             If .pa.ptrs(0) = NULL_PTR Then
-                .coll.Remove CStr(ptr)
+                .enumsColl.Remove CStr(ptr)
             ElseIf .pa.ptrs(0) = searchPtr Then
                 If replacePtr = NULL_PTR Then
-                    .coll.Remove CStr(ptr)
+                    .enumsColl.Remove CStr(ptr)
                 Else
                     .pa.ptrs(0) = replacePtr
                 End If
             End If
         Next e
-        .hasEnum = (.coll.Count > 0)
+        .hasEnum = (.enumsColl.Count > 0)
         .pa.sa.rgsabound0.cElements = 0
         .pa.sa.pvData = NULL_PTR
     End With
@@ -1351,7 +1353,7 @@ End Sub
 Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
     Dim e As Variant 'IEnumVARIANT does not work with For Each
     With m_enumProvider
-        For Each e In .coll
+        For Each e In .enumsColl
             .pa.sa.pvData = ObjPtr(e) + NEXT_ITEM_OFFSET
             .pa.sa.rgsabound0.cElements = 1
             .pa.ptrs(0) = .pa.ptrs(0) + addrShift
