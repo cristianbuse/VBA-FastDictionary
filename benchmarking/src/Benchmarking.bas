@@ -118,17 +118,25 @@ Public Sub Benchmark(ByRef keysToAdd() As Variant _
                         Next i
                         elapsed(j, opItemGet) = Round(AccurateTimerUs - elapsed(j, opItemGet), 0)
                         '
-                        #If Mac Then
-                            On Error Resume Next 'To avoid implementation bugs
-                        #End If
-                        elapsed(j, opItemLet) = AccurateTimerUs
-                        For i = 1 To iterations
-                            vdict.Item(keysToAdd(i)) = i
-                        Next i
-                        elapsed(j, opItemLet) = Round(AccurateTimerUs - elapsed(j, opItemLet), 0)
-                        #If Mac Then
-                            On Error GoTo 0
-                        #End If
+                        If IsNumeric(prevElapsed(j, opItemLet)) Then
+                            If prevElapsed(j, opItemLet) > thirtySecondsU Then
+                                elapsed(j, opItemLet) = "'Item(Let)' slow"
+                            Else
+                                #If Mac Then
+                                    On Error Resume Next 'To avoid implementation bugs
+                                #End If
+                                elapsed(j, opItemLet) = AccurateTimerUs
+                                For i = 1 To iterations
+                                    vdict.Item(keysToAdd(i)) = i
+                                Next i
+                                elapsed(j, opItemLet) = Round(AccurateTimerUs - elapsed(j, opItemLet), 0)
+                                #If Mac Then
+                                    On Error GoTo 0
+                                #End If
+                            End If
+                        Else
+                            elapsed(j, opItemLet) = prevElapsed(j, opItemLet)
+                        End If
                         '
                         If IsNumeric(prevElapsed(j, opKeyLet)) Then
                             If prevElapsed(j, opKeyLet) > thirtySecondsU Then
