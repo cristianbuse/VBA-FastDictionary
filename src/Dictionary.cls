@@ -1137,6 +1137,7 @@ Friend Sub InitHasher(ByRef h As Hasher)
     Static saF As SAFEARRAY_1D
     Static pa As PointerAccessor
     Static fakePtr As LongPtr
+    Static isScrAvailable As Boolean
     '
     If Not Me Is Dictionary Then Exit Sub
     If Not pa.isSet Then
@@ -1155,8 +1156,8 @@ Friend Sub InitHasher(ByRef h As Hasher)
         Set temp = CreateObject("Scripting.Dictionary")
         On Error GoTo 0
         '
-        h.isScrAvailable = Not (temp Is Nothing)
-        If h.isScrAvailable Then
+        isScrAvailable = Not (temp Is Nothing)
+        If isScrAvailable Then
             'Copy Scripting.Dictionary virtual table addresses
             pa.sa.pvData = ObjPtr(temp)
             pa.sa.rgsabound0.cElements = dictMainVTableSize
@@ -1205,8 +1206,9 @@ Friend Sub InitHasher(ByRef h As Hasher)
             pa.sa.rgsabound0.cElements = 1
         End If
     End If
-    If h.isScrAvailable Then
+    If isScrAvailable Then
         h.lcid = lcid
+        h.isScrAvailable = True
         Set h.defInstance = Me 'Avoid deallocation of this instance
         pa.sa.pvData = VarPtr(h)
         pa.ptrs(0) = VarPtr(saF)
