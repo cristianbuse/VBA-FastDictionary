@@ -29,7 +29,7 @@ This Dictionary does not require any DLL references or any kind of external libr
 - [Rehashing](#rehashing)
 - [NewEnum](#newenum)
   - [x64 implementation](#x64-implementation)
-  - [x32 implementation](#x64-implementation)
+  - [x32 implementation](#x32-implementation)
   - [Enumerator management](#enumerator-management)
 - [Additional functionality](#additional-functionality)
 
