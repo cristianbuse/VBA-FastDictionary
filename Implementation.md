@@ -155,7 +155,15 @@ We can see in the above code that:
 
 This is the standard behaviour when comparing Variants in VBA, clearly outlined [here](https://learn.microsoft.com/en-us/office/vba/language/reference/user-interface-help/comparison-operators#remarks). However, for the Scripting.Dictinary this yields different results depending on the order these special values are added to the dictionary.
 
-To avoid this unfortunate and misleading behaviour, this Dictionary distinguishes between these values and allows all 3 at the same time.
+To avoid this unfortunate and misleading behaviour, this Dictionary distinguishes between these values and allows all 3 at the same time. The following code is valid when using this Dictionary:
+```VBA
+dict("") = 1
+dict(Empty) = 2
+dict(0) = 3
+debug.print dict("") '1
+debug.print dict(Empty) '2
+debug.print dict(0) '3
+```
 
 ## Hashing
 
