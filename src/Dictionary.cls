@@ -315,17 +315,19 @@ Private m_lookups As Lookups
 
 Private Sub Init(Optional ByVal newGroupCount As Long = INITIAL_GROUP_COUNT)
     InitHashMap newGroupCount
-    m_data.Count = 0
-    m_data.UBound = 0
-    m_data.UsedCount = 0
     m_isUnordered = False
-    ReDim m_data.Items(0 To 0)
-#If Win64 Then
-    ReDim m_data.Keys(0 To 1) 'Extra member for safe IEnumVariant
-    ReDim m_data.Meta(0 To 0)
-#Else
-    ReDim m_data.Keys(0 To 0)
-#End If
+    With m_data
+        .Count = 0
+        .UsedCount = 0
+        .UBound = newGroupCount * GROUP_SIZE / 2 - 1
+        ReDim .Items(0 To .UBound)
+    #If Win64 Then
+        ReDim .Keys(0 To .UBound + 1) 'Extra member for safe IEnumVariant
+        ReDim .Meta(0 To .UBound)
+    #Else
+        ReDim .Keys(0 To .UBound)
+    #End If
+    End With
     If Not m_hasher.isSet Then
         InitLookups
         InitLocalHasher
