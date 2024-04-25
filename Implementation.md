@@ -527,6 +527,8 @@ When searching the hash table for a key that was just hashed, we first compare t
 
 The meta values are defined in the [HashMeta](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L209-L217) enum. There is also a special value ```hmRemove``` used to mark items/keys that have been removed.
 
+Please note that for special float values like +Inf (positive infinity), -Inf (negative infinity), QNaN (quiet NaN) and SNaN (signaling NaN), the meta bits are all set to 0 (zero). This is to avoid comparison against these special values - the hash comparison will be enough in the same way it is for ```Empty``` and ```Null```.
+
 ## Hash Map/Table
 
 After watching the [Designing a Fast, Efficient, Cache-friendly Hash Table, Step by Step](https://www.youtube.com/watch?v=ncHmEUmJZf4) video on YouTube, presented by Matt Kulukundis, the idea of using SSE instructions to compare multiple sub-hashes in a set of just 3 instructions sounded great. Since we cannot natively use SSE instructions in VBA, this Dictionary uses the next best thing - bitwise operations.

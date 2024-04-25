@@ -480,6 +480,8 @@ End Sub
 '                  | 0| 1|       - Input is an Error (HashMeta.hmError)
 '|0|               | 0| 0|       - Input is Empty (all bits are 0)
 '|1|               | 0| 0|       - Input is Null (bit 0 is 1 - vbNull)
+'|2|               | 0| 0|       - Key was removed (HashMeta.hmRemoved)
+'|?|?|?|?|...| ?| ?| 0| 0|       - Input is +Inf or -Inf or QNaN or SNaN
 Private Function GetIndex(ByRef Key As Variant _
                         , Optional ByRef hVal As Long _
                         , Optional ByRef groupSlot As Long _
@@ -561,7 +563,9 @@ Private Function GetIndex(ByRef Key As Variant _
             m_hasher.d = Key
         End If
         Const n1& = 1201, n2& = 2701, n3& = 131, n4& = 28571
+        Const infOrNaN As Integer = &H7FF0 'Exponent bits for Double Float
         With m_hasher.ia
+            If (.ints(3) And infOrNaN) = infOrNaN Then m = 0
             hVal = (.ints(0) * n4 + .ints(1) * n3 _
                   + .ints(2) * n2 + .ints(3) * n1) And HashMeta.[_maskHM] Or m
         End With
@@ -602,7 +606,7 @@ Private Function GetIndex(ByRef Key As Variant _
                                  , Key, m_compare) = 0 Then Exit Function
                     ElseIf vt = vbObject Then 'vbDataObject was replaced
                         If m_data.Keys(GetIndex) Is Key Then Exit Function
-                    ElseIf hVal <= vbNull Then 'Already matched
+                    ElseIf hVal < HashMeta.[_modHM] Then 'Already matched
                         Exit Function
                     Else 'Number, Error or case-sensitive Text
                         If m_data.Keys(GetIndex) = Key Then Exit Function
@@ -615,7 +619,7 @@ Private Function GetIndex(ByRef Key As Variant _
                                  , Key, m_compare) = 0 Then Exit Function
                     ElseIf vt = vbObject Then 'vbDataObject was replaced
                         If m_data.Keys(GetIndex).Value Is Key Then Exit Function
-                    ElseIf hVal <= vbNull Then 'Already matched
+                    ElseIf hVal < HashMeta.[_modHM] Then 'Already matched
                         Exit Function
                     Else 'Number, Error or case-sensitive Text
                         If m_data.Keys(GetIndex).Value = Key Then Exit Function
