@@ -8,7 +8,7 @@ Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = False
 '''=============================================================================
-''' VBA Mini Dictionary
+''' VBA Fast Dictionary
 ''' --------------------------------------------------
 ''' https://github.com/cristianbuse/VBA-FastDictionary
 ''' --------------------------------------------------
@@ -281,6 +281,9 @@ Private Type Hasher
     ia As IntegerAccessor
     d As Double 'For hashing numbers
     dPtr As LongPtr
+#If Win64 Then
+    la As PointerAccessor
+#End If
 End Type
 
 Private Type Lookups
@@ -291,6 +294,7 @@ Private Type Lookups
     CountMask(0 To GROUP_SIZE) As LongPtr
 #If Win64 Then
     ModBytePosition(0 To 15) As Long
+    ExpPos(0 To 63) As LongLong 'Double Float Exponent Position
 #Else
     ModBytePosition(0 To 4) As Long
 #End If
@@ -564,11 +568,30 @@ Private Function GetIndex(ByRef Key As Variant _
         End If
         Const n1& = 1201, n2& = 2701, n3& = 131, n4& = 28571
         Const infOrNaN As Integer = &H7FF0 'Exponent bits for Double Float
-        With m_hasher.ia
-            If (.ints(3) And infOrNaN) = infOrNaN Then m = 0
-            hVal = (.ints(0) * n4 + .ints(1) * n3 _
-                  + .ints(2) * n2 + .ints(3) * n1) And HashMeta.[_maskHM] Or m
-        End With
+        #If Win64 Then
+            Const maskLL As LongLong = HashMeta.[_maskHM]
+            Const iSignBit As Integer = &H8000
+            Const factionalBits As LongLong = &HFFFFFFFFFFFFF^
+            Const normalBit As LongLong = factionalBits + 1
+            Dim h As LongLong, bitFinder As LongLong
+            Dim highBits As Integer: highBits = m_hasher.ia.ints(3)
+            '
+            If (highBits And infOrNaN) = infOrNaN Then
+                hVal = (highBits * n1 + m_hasher.ia.ints(0) * n4) And [_maskHM]
+            Else
+                h = m_hasher.la.ptrs(0) And factionalBits Or normalBit
+                bitFinder = h Or m_lookups.ExpPos((highBits And &H3F0) \ &H10)
+                h = h \ (bitFinder And -bitFinder)
+                If highBits And iSignBit Then h = Not h - 1
+                hVal = CLng(h And maskLL) Or m
+            End If
+        #Else
+            With m_hasher.ia
+                If (.ints(3) And infOrNaN) = infOrNaN Then m = 0
+                hVal = (.ints(0) * n4 + .ints(1) * n3 _
+                      + .ints(2) * n2 + .ints(3) * n1) And [_maskHM] Or m
+            End With
+        #End If
     Else
         hVal = vt 'vbEmpty (0) or vbNull (1)
     End If
@@ -1086,6 +1109,10 @@ Private Sub InitLookups()
         .ModBytePosition(8) = 4
         .ModBytePosition(15) = 5
         .ModBytePosition(2) = 6
+        .ExpPos(51) = 1
+        For i = 50 To 0 Step -1
+            .ExpPos(i) = .ExpPos(i + 1) * 2
+        Next i
     #Else
         .ModBytePosition(1) = 1
         .ModBytePosition(4) = 2
@@ -1110,6 +1137,11 @@ Private Sub InitLocalHasher()
         .ia.sa.pvData = .dPtr
         .ia.sa.rgsabound0.cElements = INTS_IN_DOUBLE
         .isSet = True
+        #If Win64 Then
+            InitSafeArray .la.sa, PTR_SIZE
+            .la.sa.pvData = m_hasher.dPtr
+            .la.sa.rgsabound0.cElements = 1
+        #End If
     End With
 End Sub
 Private Sub InitSafeArray(ByRef sa As SAFEARRAY_1D, ByVal elemSize As Long)
@@ -1227,6 +1259,10 @@ Friend Sub InitHasher(ByRef h As Hasher)
     'Init integer accesor
     pa.sa.pvData = VarPtr(h.ia)
     pa.ptrs(0) = VarPtr(h.ia.sa)
+    #If Win64 Then
+        pa.sa.pvData = VarPtr(h.la)
+        pa.ptrs(0) = VarPtr(h.la.sa)
+    #End If
     '
     pa.sa.pvData = fakePtr
 End Sub
