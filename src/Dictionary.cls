@@ -8,7 +8,7 @@ Attribute VB_Creatable = False
 Attribute VB_PredeclaredId = True
 Attribute VB_Exposed = False
 '''=============================================================================
-''' VBA Mini Dictionary
+''' VBA Fast Dictionary
 ''' --------------------------------------------------
 ''' https://github.com/cristianbuse/VBA-FastDictionary
 ''' --------------------------------------------------
@@ -281,6 +281,9 @@ Private Type Hasher
     ia As IntegerAccessor
     d As Double 'For hashing numbers
     dPtr As LongPtr
+#If Win64 Then
+    la As PointerAccessor
+#End If
 End Type
 
 Private Type Lookups
@@ -291,6 +294,7 @@ Private Type Lookups
     CountMask(0 To GROUP_SIZE) As LongPtr
 #If Win64 Then
     ModBytePosition(0 To 15) As Long
+    ExpPos(0 To 63) As LongLong 'Double Float Exponent Position
 #Else
     ModBytePosition(0 To 4) As Long
 #End If
@@ -315,17 +319,19 @@ Private m_lookups As Lookups
 
 Private Sub Init(Optional ByVal newGroupCount As Long = INITIAL_GROUP_COUNT)
     InitHashMap newGroupCount
-    m_data.Count = 0
-    m_data.UBound = 0
-    m_data.UsedCount = 0
     m_isUnordered = False
-    ReDim m_data.Items(0 To 0)
-#If Win64 Then
-    ReDim m_data.Keys(0 To 1) 'Extra member for safe IEnumVariant
-    ReDim m_data.Meta(0 To 0)
-#Else
-    ReDim m_data.Keys(0 To 0)
-#End If
+    With m_data
+        .Count = 0
+        .UsedCount = 0
+        .UBound = newGroupCount * GROUP_SIZE / 2 - 1
+        ReDim .Items(0 To .UBound)
+    #If Win64 Then
+        ReDim .Keys(0 To .UBound + 1) 'Extra member for safe IEnumVariant
+        ReDim .Meta(0 To .UBound)
+    #Else
+        ReDim .Keys(0 To .UBound)
+    #End If
+    End With
     If Not m_hasher.isSet Then
         InitLookups
         InitLocalHasher
@@ -478,6 +484,8 @@ End Sub
 '                  | 0| 1|       - Input is an Error (HashMeta.hmError)
 '|0|               | 0| 0|       - Input is Empty (all bits are 0)
 '|1|               | 0| 0|       - Input is Null (bit 0 is 1 - vbNull)
+'|2|               | 0| 0|       - Key was removed (HashMeta.hmRemoved)
+'|?|?|?|?|...| ?| ?| 0| 0|       - Input is +Inf or -Inf or QNaN or SNaN
 Private Function GetIndex(ByRef Key As Variant _
                         , Optional ByRef hVal As Long _
                         , Optional ByRef groupSlot As Long _
@@ -559,10 +567,31 @@ Private Function GetIndex(ByRef Key As Variant _
             m_hasher.d = Key
         End If
         Const n1& = 1201, n2& = 2701, n3& = 131, n4& = 28571
-        With m_hasher.ia
-            hVal = (.ints(0) * n4 + .ints(1) * n3 _
-                  + .ints(2) * n2 + .ints(3) * n1) And HashMeta.[_maskHM] Or m
-        End With
+        Const infOrNaN As Integer = &H7FF0 'Exponent bits for Double Float
+        #If Win64 Then
+            Const maskLL As LongLong = HashMeta.[_maskHM]
+            Const iSignBit As Integer = &H8000
+            Const factionalBits As LongLong = &HFFFFFFFFFFFFF^
+            Const normalBit As LongLong = factionalBits + 1
+            Dim h As LongLong, bitFinder As LongLong
+            Dim highBits As Integer: highBits = m_hasher.ia.ints(3)
+            '
+            If (highBits And infOrNaN) = infOrNaN Then
+                hVal = (highBits * n1 + m_hasher.ia.ints(0) * n4) And [_maskHM]
+            Else
+                h = m_hasher.la.ptrs(0) And factionalBits Or normalBit
+                bitFinder = h Or m_lookups.ExpPos((highBits And &H3F0) \ &H10)
+                h = h \ (bitFinder And -bitFinder)
+                If highBits And iSignBit Then h = Not h - 1
+                hVal = CLng(h And maskLL) Or m
+            End If
+        #Else
+            With m_hasher.ia
+                If (.ints(3) And infOrNaN) = infOrNaN Then m = 0
+                hVal = (.ints(0) * n4 + .ints(1) * n3 _
+                      + .ints(2) * n2 + .ints(3) * n1) And [_maskHM] Or m
+            End With
+        #End If
     Else
         hVal = vt 'vbEmpty (0) or vbNull (1)
     End If
@@ -600,7 +629,7 @@ Private Function GetIndex(ByRef Key As Variant _
                                  , Key, m_compare) = 0 Then Exit Function
                     ElseIf vt = vbObject Then 'vbDataObject was replaced
                         If m_data.Keys(GetIndex) Is Key Then Exit Function
-                    ElseIf hVal <= vbNull Then 'Already matched
+                    ElseIf hVal < HashMeta.[_modHM] Then 'Already matched
                         Exit Function
                     Else 'Number, Error or case-sensitive Text
                         If m_data.Keys(GetIndex) = Key Then Exit Function
@@ -613,7 +642,7 @@ Private Function GetIndex(ByRef Key As Variant _
                                  , Key, m_compare) = 0 Then Exit Function
                     ElseIf vt = vbObject Then 'vbDataObject was replaced
                         If m_data.Keys(GetIndex).Value Is Key Then Exit Function
-                    ElseIf hVal <= vbNull Then 'Already matched
+                    ElseIf hVal < HashMeta.[_modHM] Then 'Already matched
                         Exit Function
                     Else 'Number, Error or case-sensitive Text
                         If m_data.Keys(GetIndex).Value = Key Then Exit Function
@@ -624,8 +653,7 @@ Private Function GetIndex(ByRef Key As Variant _
             If Not .WasEverFull Then Exit Do
         End With
         groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
-        If groupSlot = startSlot Then Exit Do 'Avoid infinite loop
-    Loop
+    Loop Until groupSlot = startSlot
     GetIndex = NOT_FOUND
 End Function
 
@@ -1080,6 +1108,10 @@ Private Sub InitLookups()
         .ModBytePosition(8) = 4
         .ModBytePosition(15) = 5
         .ModBytePosition(2) = 6
+        .ExpPos(51) = 1
+        For i = 50 To 0 Step -1
+            .ExpPos(i) = .ExpPos(i + 1) * 2
+        Next i
     #Else
         .ModBytePosition(1) = 1
         .ModBytePosition(4) = 2
@@ -1104,6 +1136,11 @@ Private Sub InitLocalHasher()
         .ia.sa.pvData = .dPtr
         .ia.sa.rgsabound0.cElements = INTS_IN_DOUBLE
         .isSet = True
+        #If Win64 Then
+            InitSafeArray .la.sa, PTR_SIZE
+            .la.sa.pvData = m_hasher.dPtr
+            .la.sa.rgsabound0.cElements = 1
+        #End If
     End With
 End Sub
 Private Sub InitSafeArray(ByRef sa As SAFEARRAY_1D, ByVal elemSize As Long)
@@ -1221,6 +1258,10 @@ Friend Sub InitHasher(ByRef h As Hasher)
     'Init integer accesor
     pa.sa.pvData = VarPtr(h.ia)
     pa.ptrs(0) = VarPtr(h.ia.sa)
+    #If Win64 Then
+        pa.sa.pvData = VarPtr(h.la)
+        pa.ptrs(0) = VarPtr(h.la.sa)
+    #End If
     '
     pa.sa.pvData = fakePtr
 End Sub
