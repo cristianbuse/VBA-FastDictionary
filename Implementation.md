@@ -32,6 +32,7 @@ This Dictionary does not require any DLL references or any kind of external libr
   - [x32 implementation](#x32-implementation)
   - [Enumerator management](#enumerator-management)
 - [Additional functionality](#additional-functionality)
+- [OLE Automation](#ole-automation)
 
 ***
 
@@ -689,3 +690,15 @@ Compared to a Scripting.Dictionary, this Dictionary has a few extra methods that
   - If set to ```False``` (Default), then calling ```Remove``` preserves the order in which the Key-Item pairs were added but calling ```Items``` and ```Keys``` will be slower if there are any gaps in the storage arrays. If ```Remove``` is not called, then this setting has no effect
   - If set to ```True```, then calling ```Remove``` ruins the order in which the Key-Item pairs were added but calling ```Items``` and ```Keys``` will be as fast as copying the entire array in one instruction. This is because the last pair is always swapped with the one being removed thus leaving no gaps in the storage arrays
 - ```IsOrdered``` (Boolean) - only returns ```False``` if ```FastUnorderedRemove``` is set to ```True``` and the order was ruined by calling ```Remove```
+
+## OLE Automation
+
+Although this dictionary does not rely on other libraries or references, it still requires that the basic ```OLE Automation``` reference in enabled. This is because the ```IUnknown``` interface is needed to properly hash object keys - for more details see this [discussion](https://github.com/cristianbuse/VBA-FastDictionary/discussions/5).
+
+This is such a basic reference that even VBA itself uses it - if we look at the type library for VBA, we can see:
+```
+library VBA
+{
+    // TLib : OLE Automation : {00020430-0000-0000-C000-000000000046}
+    importlib("stdole2.tlb");
+```
