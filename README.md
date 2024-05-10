@@ -9,7 +9,7 @@ Special thanks to [Guido](https://github.com/guwidoe) for his contribution (see 
 
 Download the latest [release](https://github.com/cristianbuse/VBA-FastDictionary/releases), extract and import the ```Dictionary.cls``` class into your project.
 
-Although the ```OLE Automation``` project reference should be enabled by default (fundamental COM), please enable it if it's disabled. For more details see [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#ole-automation).
+Although the ```OLE Automation``` project reference should be enabled by default (fundamental COM), please enable it if it's disabled. For more details see [OLE Automation](https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#ole-automation) section.
 
 ## Important
 
