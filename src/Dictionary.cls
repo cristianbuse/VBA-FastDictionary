@@ -653,8 +653,7 @@ Private Function GetIndex(ByRef Key As Variant _
             If Not .WasEverFull Then Exit Do
         End With
         groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
-        If groupSlot = startSlot Then Exit Do 'Avoid infinite loop
-    Loop
+    Loop Until groupSlot = startSlot
     GetIndex = NOT_FOUND
 End Function
 
