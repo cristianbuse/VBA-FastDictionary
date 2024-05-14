@@ -1140,6 +1140,10 @@ Private Sub InitLocalHasher()
             InitSafeArray .la.sa, PTR_SIZE
             .la.sa.pvData = m_hasher.dPtr
             .la.sa.rgsabound0.cElements = 1
+            #If Mac Then
+                CopyMemory ByVal VarPtr(m_hasher.la) _
+                         , VarPtr(m_hasher.la.sa), PTR_SIZE
+            #End If
         #End If
     End With
 End Sub
