@@ -524,6 +524,18 @@ Private Sub TestDictionaryKey()
     d.Key("oldkey") = "newKey"
     Debug.Assert Err.Number = 0
     On Error GoTo 0
+    '
+    d.RemoveAll
+    d.Add "oldKey", New Collection
+    d.Add "someKey", 444
+    '
+    On Error Resume Next
+    d.Key("oldkey") = "SOMEKey"
+    Debug.Assert Err.Number = duplicatedKeyErr
+    Err.Clear
+    d.Key("oldkey") = "newKey"
+    Debug.Assert Err.Number = 0
+    On Error GoTo 0
 End Sub
 
 Private Sub TestDictionaryKeys()
