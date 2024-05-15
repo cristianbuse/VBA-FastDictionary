@@ -102,27 +102,15 @@ Option Compare Binary
 
 #If Mac Then
     #If VBA7 Then
-        Private Declare PtrSafe Function CopyMemory Lib "/usr/lib/libc.dylib" _
-                Alias "memmove" (Destination As Any _
-                               , Source As Any _
-                               , ByVal Length As LongPtr) As LongPtr
+        Private Declare PtrSafe Function CopyMemory Lib "/usr/lib/libc.dylib" Alias "memmove" (Destination As Any, Source As Any, ByVal Length As LongPtr) As LongPtr
     #Else
-        Private Declare Function CopyMemory Lib "/usr/lib/libc.dylib" _
-                Alias "memmove" (Destination As Any _
-                               , Source As Any _
-                               , ByVal Length As Long) As Long
+        Private Declare Function CopyMemory Lib "/usr/lib/libc.dylib" Alias "memmove" (Destination As Any, Source As Any, ByVal Length As Long) As Long
     #End If
 #Else 'Windows
     #If VBA7 Then
-        Private Declare PtrSafe Sub CopyMemory Lib "kernel32" _
-                Alias "RtlMoveMemory" (Destination As Any _
-                                     , Source As Any _
-                                     , ByVal Length As LongPtr)
+        Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
     #Else
-        Private Declare Sub CopyMemory Lib "kernel32" _
-                Alias "RtlMoveMemory" (Destination As Any _
-                                     , Source As Any _
-                                     , ByVal Length As Long)
+        Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As Long)
     #End If
 #End If
 #If VBA7 = 0 Then
@@ -835,7 +823,7 @@ Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     ClearMapIndex groupSlot, posInGroup
     '
     'Update hash map with new key
-    groupSlot = hVal Mod m_hash.GroupCount
+    groupSlot = hVal And m_hash.GroupMask
     Do While m_hash.Groups(groupSlot).Count = GROUP_SIZE
          groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
     Loop
