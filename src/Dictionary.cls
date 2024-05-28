@@ -534,14 +534,22 @@ Private Function GetIndex(ByRef Key As Variant _
         End If
 #End If
     ElseIf vt = vbObject Or vt = vbDataObject Then
-        Const oPrime As Long = 2701&
-        Const oPreMask As Long = &H6FFFFFFF
+        Const oPrime As LongPtr = 2701&
         Static iUnk As stdole.IUnknown 'Dim is slower
         '
         vt = vbObject 'Replace vbDataObject if needed
         Set iUnk = Key
-        hVal = CLng(ObjPtr(iUnk) And oPreMask) 'Ignores high bits on x64
-        hVal = (hVal + hVal Mod oPrime) And [_maskHM] Or hmObject
+        #If Win64 Then
+            Const oPreMask As LongLong = &H6FFFFFFFFFFFFFFF^
+            Dim ll As LongLong
+            ll = ObjPtr(iUnk) And oPreMask
+            ll = ll + ll \ &H1000^ + ll Mod oPrime
+            hVal = CLng(ll And [_maskHM]) Or hmObject
+        #Else
+            Const oPreMask As Long = &H6FFFFFFF
+            hVal = ObjPtr(iUnk) And oPreMask
+            hVal = (hVal + hVal Mod oPrime) And [_maskHM] Or hmObject
+        #End If
         Set iUnk = Nothing 'Must call because of Static but still faster
     ElseIf vt > vbLongLong Then
         Err.Raise 5, , "Cannot hash an Array or User Defined Type"
