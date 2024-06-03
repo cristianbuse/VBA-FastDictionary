@@ -534,7 +534,7 @@ Private Function GetIndex(ByRef Key As Variant _
         End If
 #End If
     ElseIf vt = vbObject Or vt = vbDataObject Then
-        Const oPrime As LongPtr = 2701&
+        Const oPrime As Long = 2701&
         Static iUnk As stdole.IUnknown 'Dim is slower
         '
         vt = vbObject 'Replace vbDataObject if needed
