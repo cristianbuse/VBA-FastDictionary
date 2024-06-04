@@ -126,7 +126,7 @@ Const INITIAL_GROUP_COUNT As Long = 16
     Const NULL_PTR As LongLong = 0^
     Const PTR_SIZE As Long = 8
     Const SIGN_BIT As LongLong = &H8000000000000000^
-    Const HIGH_BIT_OFF As LongLong = &H7F7F7F7F7F7F7F7F^  'Bit Off Per Each Byte
+    Const HIGH_BIT_OFF As LongLong = &H7F7F7F7F7F7F7F7F^ 'Bit Off Per Each Byte
     Const HIGH_BIT_ONLY As LongLong = &H8080808080808080^
     Const NHIGH_BIT_OFF As LongLong = HIGH_BIT_OFF Or SIGN_BIT
     Const BYTE_BROADCAST As LongLong = &H101010101010101^
@@ -543,7 +543,7 @@ Private Function GetIndex(ByRef Key As Variant _
             Const oPreMask As LongLong = &H6FFFFFFFFFFFFFFF^
             Dim ll As LongLong
             ll = ObjPtr(iUnk) And oPreMask
-            ll = ll + ll \ &H1000^ + ll Mod oPrime
+            ll = ll + ll \ &H1000 + ll Mod oPrime
             hVal = CLng(ll And [_maskHM]) Or hmObject
         #Else
             Const oPreMask As Long = &H6FFFFFFF
