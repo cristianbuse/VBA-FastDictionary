@@ -1,3 +1,5 @@
-*.bas eol=crlf linguist-language=VBA
-*.cls eol=crlf linguist-language=VBA
+*.bas -text linguist-language=VBA
+*.frm -text linguist-language=VBA
+*.cls -text linguist-language=VBA
+
 *.png filter=lfs diff=lfs merge=lfs -text
