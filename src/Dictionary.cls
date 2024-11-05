@@ -305,6 +305,22 @@ Private m_hasher As Hasher
 Private m_isUnordered As Boolean
 Private m_lookups As Lookups
 
+'The 'NewEnum' method must always be the first method in the class so that it's
+'   virtual table position is known. This is because we want to fix the x64 bug
+'   when using a For Each.. loop:
+'https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes
+'
+'Unfortunately we cannot use ITypeInfo::AddressOfMember because it overrides
+'   some assembly bytes:
+'https://stackoverflow.com/questions/65507735/address-of-class-method-crash-on-x64
+
+'@Enumerator
+Public Function NewEnum() As IUnknown
+Attribute NewEnum.VB_UserMemId = -4
+'Attribute NewEnum.VB_UserMemId = -4
+    Set NewEnum = DictEnum
+End Function
+
 Private Sub Init(Optional ByVal newGroupCount As Long = INITIAL_GROUP_COUNT)
     InitHashMap newGroupCount
     m_isUnordered = False
@@ -1242,6 +1258,21 @@ Friend Sub InitHasher(ByRef h As Hasher)
             pa.sa.pvData = fakePtr
             pa.sa.rgsabound0.cElements = 1
         End If
+        '
+        'Increase stack frame size for 'NewEnum' to avoid For Each.. x64 bug
+        #If Win64 Then
+            pa.sa.pvData = ObjPtr(Me) 'vtbl
+            pa.sa.rgsabound0.cElements = 1
+            '
+            pa.sa.pvData = pa.ptrs(0) + PTR_SIZE * 7 'NewEnum address
+            pa.sa.pvData = pa.ptrs(0) + 21 'SUB R12, 0x10
+            '
+            If (pa.ptrs(0) And &HFFFF^) = &H8149^ Then
+                'SUB found. Replace 0x10 (16) with 0x800 (2048) bytes
+                pa.ptrs(0) = pa.ptrs(0) And &HFF00000000FFFFFF^ Or &H800000000^
+            End If
+            pa.sa.pvData = fakePtr
+        #End If
     End If
     If isScrAvailable Then
         h.lcid = lcid
@@ -1292,18 +1323,15 @@ Public Property Get HashVal(ByRef Key As Variant) As Long
     GetIndex Key, HashVal, hashOnly:=True
 End Property
 
-'@Enumerator
-Public Function NewEnum() As IUnknown
-Attribute NewEnum.VB_UserMemId = -4
-'Attribute NewEnum.VB_UserMemId = -4
+Private Function DictEnum() As IUnknown
     Dim hadEnum As Boolean
     '
     With m_enumProvider
         hadEnum = .hasEnum
         If .hasEnum Then RemoveUnusedEnums
-        Set NewEnum = .emptyColl.[_NewEnum]
+        Set DictEnum = .emptyColl.[_NewEnum]
         .hasEnum = True
-        .enumsColl.Add NewEnum, CStr(ObjPtr(NewEnum))
+        .enumsColl.Add DictEnum, CStr(ObjPtr(DictEnum))
         If Not .pa.isSet Then Dictionary.InitPointerAccessor .pa
     End With
     If m_data.UsedCount = 0 Then Exit Function
@@ -1319,7 +1347,7 @@ Attribute NewEnum.VB_UserMemId = -4
         #End If
     End If
     With m_enumProvider.pa
-        .sa.pvData = ObjPtr(NewEnum) + NEXT_ITEM_OFFSET
+        .sa.pvData = ObjPtr(DictEnum) + NEXT_ITEM_OFFSET
         .sa.rgsabound0.cElements = 1
         .ptrs(0) = VarPtr(m_data.Keys(i))
     End With
