@@ -11,10 +11,6 @@ Download the latest [release](https://github.com/cristianbuse/VBA-FastDictionary
 
 Although the ```OLE Automation``` project reference should be enabled by default (fundamental COM), please enable it if it's disabled. For more details see [OLE Automation](https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#ole-automation) section.
 
-## Important
-
-Please be aware that there is an existing bug in VBA x64, when using ```For Each..``` on a class that has a custom iterator. See [this SO article](https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes/65736562#65736562) for more details. In short, this bug only happens on x64 and only if ```For Each``` is the first call in the method. This can be avoided by replacing calls like ```For Each v In Dict``` with ```For Each v In Dict.Self``` or by having a method call before the ```For Each``` call.
-
 ## Testing
 
 Download the latest [release](https://github.com/cristianbuse/VBA-FastDictionary/releases), extract and import the ```TestDictionary.bas``` module into your project.
