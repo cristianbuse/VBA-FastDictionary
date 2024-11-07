@@ -119,12 +119,7 @@ Option Compare Binary
     End Enum
 #End If
 
-Const maxLoadFactor As Single = 0.5
-#If Win64 Then
-    Const nullPtr As LongLong = 0^
-#Else
-    Const nullPtr As Long = 0&
-#End If
+Const MaxLoadFactor As Single = 0.5
     
 Private Enum InternalConstants 'Hides values from Locals window
 #If Win64 Then
@@ -452,7 +447,7 @@ End Sub
 Private Sub InitHashMap(ByVal newGroupCount As Long)
     Vars.Hash.GroupCount = newGroupCount
     ReDim Vars.Hash.Groups(0 To Vars.Hash.GroupCount - 1)
-    Vars.Hash.MaxLoad = Vars.Hash.GroupCount * groupSize * maxLoadFactor
+    Vars.Hash.MaxLoad = Vars.Hash.GroupCount * groupSize * MaxLoadFactor
     Vars.Hash.GroupMask = Vars.Hash.GroupCount - 1
     '&H80& bit cannot be multiplied with byteBroadcast without causing overflow
     Vars.Hash.ControlMask = Vars.Hash.GroupCount * &H7F&
@@ -925,7 +920,7 @@ Public Sub PredictCount(ByVal expectedCount As Long)
     '
     If expectedCount <= 0 Then Exit Sub
     expectedGroups = 2 ^ -Int(-(Log(expectedCount / groupSize) _
-                              + Log(1 / maxLoadFactor)) / Log(2))
+                              + Log(1 / MaxLoadFactor)) / Log(2))
     If expectedGroups > maxGroups Then expectedGroups = maxGroups
     '
     If Vars.Hash.GroupCount = 0 Then
@@ -970,7 +965,7 @@ Public Sub Remove(ByRef Key As Variant)
                     Vars.Items(i) = Vars.Items(lastPos)
                 End If
                 If Vars.Enums.hasEnum Then
-                    RemoveUnusedEnums VarPtr(Vars.Keys(lastPos)), nullPtr
+                    RemoveUnusedEnums VarPtr(Vars.Keys(lastPos))
                     Vars.Enums.pa.sa.pvData = VarPtr(Vars.Keys(i))
                     Vars.Enums.pa.sa.rgsabound0.cElements = 3
                     ptr = Vars.Enums.pa.ptrs(2)
@@ -987,8 +982,8 @@ Public Sub Remove(ByRef Key As Variant)
                 Vars.Keys(i) = Vars.Keys(lastPos)
                 Vars.Keys(i).NextPtr = ptr
                 If Vars.Enums.hasEnum Then
-                    RemoveUnusedEnums VarPtr(Vars.Keys(lastPos)), nullPtr
-                    Vars.Keys(lastPos - 1).NextPtr = nullPtr
+                    RemoveUnusedEnums VarPtr(Vars.Keys(lastPos))
+                    Vars.Keys(lastPos - 1).NextPtr = 0&
                 End If
                 With Vars.Keys(i)
                     If .IsItemObj Then
@@ -1063,11 +1058,11 @@ Public Sub Remove(ByRef Key As Variant)
             Vars.Count = Vars.Count - lastPos + i + 1
         End If
         If Vars.Enums.hasEnum Then
-            RemoveUnusedEnums VarPtr(Vars.Keys(lastPos)), nullPtr
+            RemoveUnusedEnums VarPtr(Vars.Keys(lastPos))
             #If Win64 Then
                 Vars.Keys(i + 1) = Empty 'Just to clear the pointer
             #Else
-                Vars.Keys(i).NextPtr = nullPtr
+                Vars.Keys(i).NextPtr = 0&
             #End If
         End If
     End If
@@ -1375,13 +1370,13 @@ Private Function DictEnum() As IUnknown
                     j = i * 3 + 5
                 End If
             Next i
-            .ptrs(j) = nullPtr
+            .ptrs(j) = 0^
         Else
             For i = 5 To .sa.rgsabound0.cElements - 4 Step 3
                 ptr = ptr + variantSize
                 .ptrs(i) = ptr
             Next i
-            .ptrs(i) = nullPtr
+            .ptrs(i) = 0^
         End If
     End With
 #Else
@@ -1394,21 +1389,26 @@ Private Function DictEnum() As IUnknown
                 j = i
             End If
         Next i
-        Vars.Keys(j).NextPtr = nullPtr
+        Vars.Keys(j).NextPtr = 0&
     Else
         ptr = ptr + enumVarSize
         For i = 0 To Vars.Count - 2
             Vars.Keys(i).NextPtr = ptr + enumVarSize * i
         Next i
-        Vars.Keys(i).NextPtr = nullPtr
+        Vars.Keys(i).NextPtr = 0&
     End If
 #End If
     Vars.Enums.pa.sa.rgsabound0.cElements = 0
-    Vars.Enums.pa.sa.pvData = nullPtr
+    Vars.Enums.pa.sa.pvData = 0
 End Function
 
 Private Sub RemoveUnusedEnums(Optional ByVal searchPtr As LongPtr _
                             , Optional ByVal replacePtr As LongPtr)
+    #If Win64 Then
+        Const nullPtr As LongLong = 0^
+    #Else
+        Const nullPtr As Long = 0&
+    #End If
     Dim e As Variant 'IEnumVARIANT does not work with For Each
     With Vars.Enums
         For Each e In .enumsColl
@@ -1450,7 +1450,7 @@ Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
         .sa.rgsabound0.cElements = Vars.Count * 3
         If hasGaps Then
             For i = 5 To .sa.rgsabound0.cElements - 1 Step 3
-                If .ptrs(i) <> nullPtr Then .ptrs(i) = .ptrs(i) + addrShift
+                If .ptrs(i) <> 0^ Then .ptrs(i) = .ptrs(i) + addrShift
             Next i
         Else
             For i = 5 To .sa.rgsabound0.cElements - 1 Step 3
@@ -1462,7 +1462,7 @@ Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
     If hasGaps Then
         For i = 0 To Vars.Count - 2
             With Vars.Keys(i)
-                If .NextPtr <> nullPtr Then .NextPtr = .NextPtr + addrShift
+                If .NextPtr <> 0& Then .NextPtr = .NextPtr + addrShift
             End With
         Next i
     Else
@@ -1472,5 +1472,5 @@ Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
     End If
 #End If
     Vars.Enums.pa.sa.rgsabound0.cElements = 0
-    Vars.Enums.pa.sa.pvData = nullPtr
+    Vars.Enums.pa.sa.pvData = 0
 End Sub
