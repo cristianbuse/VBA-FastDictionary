@@ -59,8 +59,6 @@ Attribute VB_Exposed = False
 ''           are no calls made to 'Rehash' thus resulting in better performance
 ''    * Remove
 ''         - Removes an item by Key
-''         - Preserves insertion order (default) unless 'FastUnorderedRemove' is
-''           set to 'True'
 ''    * RemoveAll
 ''         - Removes all Key-Item pairs
 ''    * Self
@@ -71,18 +69,6 @@ Attribute VB_Exposed = False
 ''         - Can be: vbBinaryCompare (Default), vbTextCompare or a locale ID
 ''    * Count <Get>
 ''         - Returns the number of Key-Item pairs
-''    * FastUnorderedRemove <Get/Let>
-''         - Can only be changed if there are no stored items
-''         - If set to 'False' (Default) then calling 'Remove' preserves the
-''           order in which the Key-Item pairs were added but calling 'Items'
-''           and 'Keys' will be slower if there are any gaps in the storage
-''           arrays. If 'Remove' is not called then this setting has no effect
-''         - If set to 'True' then calling 'Remove' ruins the order in which the
-''           Key-Item pairs were added but calling 'Items' and 'Keys' will be
-''           as fast as copying the entire array in one instruction
-''    * IsOrdered <Get>
-''         - Returns 'False' only if 'FastUnorderedRemove' is set to 'True' and
-''           order was ruined by calling 'Remove'. Otherwise returns 'True'
 ''    * Item <Get>
 ''         - Returns an Item by Key
 ''         - Default Member. Can be omitted: d.Item(Key) can be called as d(Key)
@@ -268,8 +254,6 @@ Private Type DictionaryVariables
     Look As Lookups
     Enums As EnumProvider
     Compare As VbCompareMethod
-    FastRemove As Boolean
-    IsUnordered As Boolean
     Items() As Variant
 #If Win64 Then
     Keys() As Variant
@@ -303,7 +287,6 @@ End Function
 
 Private Sub Init(Optional ByVal newGroupCount As Long = initialGroupCount)
     InitHashMap newGroupCount
-    Vars.IsUnordered = False
     With Vars
         .Count = 0
         .UsedCount = 0
@@ -694,26 +677,9 @@ Public Property Get Count() As Long
     Count = Vars.UsedCount
 End Property
 
-'Can only be changed if there are no stored items
-'When set to True, the order in which the Items/Keys were added via 'Add' is no
-'   longer preserved to facilitate faster 'Items' and 'Keys' calls
-Public Property Get FastUnorderedRemove() As Boolean
-    FastUnorderedRemove = Vars.FastRemove
-End Property
-Public Property Let FastUnorderedRemove(ByVal fastOn As Boolean)
-    If Vars.UsedCount > 0 And fastOn <> Vars.FastRemove Then
-        Err.Raise 5, TypeName(Me) & ".CompareMode", "Dict already contains data"
-    End If
-    Vars.FastRemove = fastOn
-End Property
-
 Public Function Exists(ByRef Key As Variant) As Boolean
     Exists = (GetIndex(Key) > notFound)
 End Function
-
-Public Property Get IsOrdered() As Boolean
-    IsOrdered = Not Vars.IsUnordered
-End Property
 
 'Raises Error:
 '   -    9: invalid key (key is not associated with any element)
@@ -954,118 +920,63 @@ Public Sub Remove(ByRef Key As Variant)
     lastPos = Vars.Count - 1
     Vars.UsedCount = Vars.UsedCount - 1
     If i < lastPos Then
-        If Vars.FastRemove Then
-            Vars.IsUnordered = True
-            'Swap Vars.
+        'Clear data and register removal
+        Vars.Items(i) = Empty
+        #If Win64 Then
+            Vars.Keys(i) = Empty
+            Vars.Meta(i) = hmRemoved
+        #Else
+            Vars.Keys(i).Value = Empty
+            Vars.Keys(i).Meta = hmRemoved
+        #End If
+        If Vars.Enums.hasEnum Then 'Link previous to next
+            j = i + 1
             #If Win64 Then
-                hVal = Vars.Meta(lastPos)
-                If hVal And isItemObjBit Then
-                    Set Vars.Items(i) = Vars.Items(lastPos)
-                Else
-                    Vars.Items(i) = Vars.Items(lastPos)
-                End If
-                If Vars.Enums.hasEnum Then
-                    RemoveUnusedEnums VarPtr(Vars.Keys(lastPos))
-                    Vars.Enums.pa.sa.pvData = VarPtr(Vars.Keys(i))
-                    Vars.Enums.pa.sa.rgsabound0.cElements = 3
-                    ptr = Vars.Enums.pa.ptrs(2)
-                End If
-                If hVal And HashMeta.hmObject Then
-                    Set Vars.Keys(i) = Vars.Keys(lastPos)
-                Else
-                    Vars.Keys(i) = Vars.Keys(lastPos)
-                End If
-                If Vars.Enums.hasEnum Then Vars.Enums.pa.ptrs(2) = ptr
-                Vars.Meta(i) = hVal
+                Do While Vars.Meta(j) = hmRemoved: j = j + 1: Loop
             #Else
-                ptr = Vars.Keys(i).NextPtr
-                Vars.Keys(i) = Vars.Keys(lastPos)
-                Vars.Keys(i).NextPtr = ptr
-                If Vars.Enums.hasEnum Then
-                    RemoveUnusedEnums VarPtr(Vars.Keys(lastPos))
-                    Vars.Keys(lastPos - 1).NextPtr = 0&
-                End If
-                With Vars.Keys(i)
-                    If .IsItemObj Then
-                        Set Vars.Items(i) = Vars.Items(lastPos)
-                    Else
-                        Vars.Items(i) = Vars.Items(lastPos)
-                    End If
-                    hVal = .Meta
-                End With
+                Do While Vars.Keys(j).Meta = hmRemoved: j = j + 1: Loop
             #End If
-            '
-            'Update index inside hash map
-            groupSlot = hVal And Vars.Hash.GroupMask
-            Do
-                With Vars.Hash.Groups(groupSlot)
-                    For j = 0 To .Count - 1
-                        If .Index(j) = lastPos Then
-                            .Index(j) = i
-                            Exit Do
-                        End If
-                    Next j
-                End With
-                groupSlot = (groupSlot + 1) Mod Vars.Hash.GroupCount
-            Loop
-        Else 'Clear data and register removal
-            Vars.Items(i) = Empty
-            #If Win64 Then
-                Vars.Keys(i) = Empty
-                Vars.Meta(i) = hmRemoved
-            #Else
-                Vars.Keys(i).Value = Empty
-                Vars.Keys(i).Meta = hmRemoved
-            #End If
-            If Vars.Enums.hasEnum Then 'Link previous to next
-                j = i + 1
+            ptr = VarPtr(Vars.Keys(j))
+            RemoveUnusedEnums VarPtr(Vars.Keys(i)), ptr
+            j = i - 1
+            Do While j >= 0
                 #If Win64 Then
-                    Do While Vars.Meta(j) = hmRemoved: j = j + 1: Loop
+                    If Vars.Meta(j) <> hmRemoved Then Exit Do
                 #Else
-                    Do While Vars.Keys(j).Meta = hmRemoved: j = j + 1: Loop
+                    If Vars.Keys(j).Meta <> hmRemoved Then Exit Do
                 #End If
-                ptr = VarPtr(Vars.Keys(j))
-                RemoveUnusedEnums VarPtr(Vars.Keys(i)), ptr
-                j = i - 1
-                Do While j >= 0
-                    #If Win64 Then
-                        If Vars.Meta(j) <> hmRemoved Then Exit Do
-                    #Else
-                        If Vars.Keys(j).Meta <> hmRemoved Then Exit Do
-                    #End If
-                    j = j - 1
-                Loop
-                If j >= 0 Then
-                    #If Win64 Then
-                        Vars.Enums.pa.sa.pvData = VarPtr(Vars.Keys(j + 1))
-                        Vars.Enums.pa.sa.rgsabound0.cElements = 3
-                        Vars.Enums.pa.ptrs(2) = ptr
-                    #Else
-                        Vars.Keys(j).NextPtr = ptr
-                    #End If
-                End If
+                j = j - 1
+            Loop
+            If j >= 0 Then
+                #If Win64 Then
+                    Vars.Enums.pa.sa.pvData = VarPtr(Vars.Keys(j + 1))
+                    Vars.Enums.pa.sa.rgsabound0.cElements = 3
+                    Vars.Enums.pa.ptrs(2) = ptr
+                #Else
+                    Vars.Keys(j).NextPtr = ptr
+                #End If
             End If
-            Exit Sub
         End If
-    Else
-        If Vars.Count > Vars.UsedCount Then
-            i = lastPos - 1
-            #If Win64 Then
-                Do While Vars.Meta(i) = hmRemoved: i = i - 1: Loop
-            #Else
-                Do While Vars.Keys(i).Meta = hmRemoved: i = i - 1: Loop
-            #End If
-            Vars.Count = Vars.Count - lastPos + i + 1
-        End If
-        If Vars.Enums.hasEnum Then
-            RemoveUnusedEnums VarPtr(Vars.Keys(lastPos))
-            #If Win64 Then
-                Vars.Keys(i + 1) = Empty 'Just to clear the pointer
-            #Else
-                Vars.Keys(i).NextPtr = 0&
-            #End If
-        End If
+        Exit Sub
     End If
+    If Vars.Count > Vars.UsedCount Then
+        i = lastPos - 1
+        #If Win64 Then
+            Do While Vars.Meta(i) = hmRemoved: i = i - 1: Loop
+        #Else
+            Do While Vars.Keys(i).Meta = hmRemoved: i = i - 1: Loop
+        #End If
+        Vars.Count = Vars.Count - lastPos + i + 1
+    End If
+    If Vars.Enums.hasEnum Then
+        RemoveUnusedEnums VarPtr(Vars.Keys(lastPos))
+        #If Win64 Then
+            Vars.Keys(i + 1) = Empty 'Just to clear the pointer
+        #Else
+            Vars.Keys(i).NextPtr = 0&
+        #End If
+    End If
+    '
     'Clear Variants in case deallocation is needed e.g. String/Object
     Vars.Items(lastPos) = Empty
     #If Win64 Then
@@ -1074,7 +985,6 @@ Public Sub Remove(ByRef Key As Variant)
         Vars.Keys(lastPos).Value = Empty
     #End If
     Vars.Count = Vars.Count - 1
-    Vars.IsUnordered = Vars.IsUnordered And (Vars.UsedCount > 1)
 End Sub
 
 Public Sub RemoveAll()

@@ -686,10 +686,6 @@ Compared to a Scripting.Dictionary, this Dictionary has a few extra methods that
 - ```Factory``` - returns a new Dictionary instance
 - ```PredictCount``` - if the number of Key-Item pairs is known upfront or if a good guess is possible, then a call to ```PredictCount``` with the expected number of pairs will prepare the internal size of the hash map so that there are no calls made to ```Rehash```. This results in better performance
 - ```Self``` - this method is useful in ```With New Dictionary``` code blocks
-- ```FastUnorderedRemove``` (Boolean) - can only be changed if there are no stored items (same as ```CompareMode```)
-  - If set to ```False``` (Default), then calling ```Remove``` preserves the order in which the Key-Item pairs were added but calling ```Items``` and ```Keys``` will be slower if there are any gaps in the storage arrays. If ```Remove``` is not called, then this setting has no effect
-  - If set to ```True```, then calling ```Remove``` ruins the order in which the Key-Item pairs were added but calling ```Items``` and ```Keys``` will be as fast as copying the entire array in one instruction. This is because the last pair is always swapped with the one being removed thus leaving no gaps in the storage arrays
-- ```IsOrdered``` (Boolean) - only returns ```False``` if ```FastUnorderedRemove``` is set to ```True``` and the order was ruined by calling ```Remove```
 
 ## OLE Automation
 
