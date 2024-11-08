@@ -1101,7 +1101,7 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
         '   where Collection.Item is mapped to Dictionary.HashVal. This allows
         '   calls to HashVal with early binding speed without a dll reference
         '
-        InitSafeArray saC, PTR_SIZE
+        InitSafeArray saC, ptrSize
         saC.pvData = VarPtr(c)
         saC.rgsabound0.cElements = 1
         saPtrs(4) = VarPtr(saC)
