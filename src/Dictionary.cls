@@ -59,8 +59,6 @@ Attribute VB_Exposed = False
 ''           are no calls made to 'Rehash' thus resulting in better performance
 ''    * Remove
 ''         - Removes an item by Key
-''         - Preserves insertion order (default) unless 'FastUnorderedRemove' is
-''           set to 'True'
 ''    * RemoveAll
 ''         - Removes all Key-Item pairs
 ''    * Self
@@ -71,18 +69,6 @@ Attribute VB_Exposed = False
 ''         - Can be: vbBinaryCompare (Default), vbTextCompare or a locale ID
 ''    * Count <Get>
 ''         - Returns the number of Key-Item pairs
-''    * FastUnorderedRemove <Get/Let>
-''         - Can only be changed if there are no stored items
-''         - If set to 'False' (Default) then calling 'Remove' preserves the
-''           order in which the Key-Item pairs were added but calling 'Items'
-''           and 'Keys' will be slower if there are any gaps in the storage
-''           arrays. If 'Remove' is not called then this setting has no effect
-''         - If set to 'True' then calling 'Remove' ruins the order in which the
-''           Key-Item pairs were added but calling 'Items' and 'Keys' will be
-''           as fast as copying the entire array in one instruction
-''    * IsOrdered <Get>
-''         - Returns 'False' only if 'FastUnorderedRemove' is set to 'True' and
-''           order was ruined by calling 'Remove'. Otherwise returns 'True'
 ''    * Item <Get>
 ''         - Returns an Item by Key
 ''         - Default Member. Can be omitted: d.Item(Key) can be called as d(Key)
@@ -119,46 +105,40 @@ Option Compare Binary
     End Enum
 #End If
 
-Const MAX_LOAD_FACTOR As Single = 0.5
-Const INITIAL_GROUP_COUNT As Long = 16
-
-#If Win64 Then
-    Const NULL_PTR As LongLong = 0^
-    Const PTR_SIZE As Long = 8
-    Const SIGN_BIT As LongLong = &H8000000000000000^
-    Const HIGH_BIT_OFF As LongLong = &H7F7F7F7F7F7F7F7F^ 'Bit Off Per Each Byte
-    Const HIGH_BIT_ONLY As LongLong = &H8080808080808080^
-    Const NHIGH_BIT_OFF As LongLong = HIGH_BIT_OFF Or SIGN_BIT
-    Const BYTE_BROADCAST As LongLong = &H101010101010101^
-    Const POSITION_PRIME As LongLong = 19
-    Const VARIANT_SIZE As Long = 24
+Const MaxLoadFactor As Single = 0.5
+#Const Windows = (Mac = 0)
+#Const x64 = Win64
+#Const x32 = (x64 = 0) 'We don't care about x16
+    
+Private Enum InternalConstants 'Hides constants from Locals window
+#If x64 Then
+    isItemObjBit = &H80000000
+    keyBitMask = &H7FFFFFFF
+    ptrSize = 8
 #Else
-    Const NULL_PTR As Long = 0&
-    Const PTR_SIZE As Long = 4
-    Const SIGN_BIT As Long = &H80000000
-    Const HIGH_BIT_OFF As Long = &H7F7F7F7F
-    Const NHIGH_BIT_OFF As Long = HIGH_BIT_OFF Or SIGN_BIT
-    Const HIGH_BIT_ONLY As Long = &H80808080
-    Const BYTE_BROADCAST As Long = &H1010101
-    Const POSITION_PRIME As Long = 7
-    Const ENUM_VAR_SIZE As Long = 28
+    ptrSize = 4
 #End If
-#If (Win64 = 0) Or Mac Then
-    Const vbLongLong = 20
-#End If
+    notFound = -1
+    intSize = 2
+    intsPerDouble = 4
+    groupSize = ptrSize
+    nextItemOffset = ptrSize * 2
+    initialGroupCount = 16
+End Enum
 
-Const GROUP_SIZE As Long = PTR_SIZE
-Const INTS_IN_DOUBLE As Long = 4
-Const NOT_FOUND As Long = -1
-Const NEXT_ITEM_OFFSET As Long = PTR_SIZE * 2
-#If Win64 Then
-    Const IS_ITEM_OBJ As Long = &H80000000
-    Const KEY_MASK As Long = &H7FFFFFFF
-#End If
+Private Enum HashMeta
+    hmRemoved = 2
+    hmError = &H10000000
+    hmNumber = &H20000000
+    hmText = &H30000000
+    hmObject = &H40000000
+    [_modHM] = hmError
+    [_maskHM] = [_modHM] - 1
+End Enum
 
 Private Type Group
     Count As Long
-    Index(0 To GROUP_SIZE - 1) As Long
+    Index(0 To groupSize - 1) As Long
     Control As LongPtr
     WasEverFull As Boolean
 End Type
@@ -171,7 +151,7 @@ Private Type HashMap
     ControlMask As Long
 End Type
 
-#If Win64 = 0 Then
+#If x32 Then
 Private Type EnumerableVariant
     Value As Variant
     Meta As Long
@@ -181,31 +161,6 @@ Private Type EnumerableVariant
 End Type
 #End If
 
-Private Type DataStorage
-    Items() As Variant
-#If Win64 Then
-    Keys() As Variant
-    Meta() As Long
-#Else
-    Keys() As EnumerableVariant
-#End If
-    Count As Long
-    UBound As Long
-    UsedCount As Long
-End Type
-
-Private Enum HashMeta
-    hmRemoved = 2
-    hmError = &H10000000
-    hmNumber = &H20000000
-    hmText = &H30000000
-    hmObject = &H40000000
-    [_modHM] = hmError
-    [_maskHM] = [_modHM] - 1
-End Enum
-
-#Const Windows = (Mac = 0)
-
 #If Windows Then
 Private Type ScrDictLayout 'Scripting.Dictionary memory layout
     vTables(0 To 3) As LongPtr
@@ -213,13 +168,13 @@ Private Type ScrDictLayout 'Scripting.Dictionary memory layout
     refCount As Long
     firstItemPtr As LongPtr
     lastItemPtr As LongPtr
-#If Win64 = 0 Then
+#If x32 Then
     Dummy As Long
 #End If
     hashTablePtr As LongPtr
     hashModulo As Long
     compMode As Long
-    localeID As Long
+    lcid As Long
     unkPtrs(0 To 2) As LongPtr
 End Type
 #End If
@@ -236,51 +191,27 @@ Private Type SAFEARRAY_1D
     pvData As LongPtr
     rgsabound0 As SAFEARRAYBOUND
 End Type
-
-'Minimal version of MEMORY_ACCESSOR:
-'https://github.com/cristianbuse/VBA-MemoryTools
-Private Type IntegerAccessor
-    ints() As Integer
-    sa As SAFEARRAY_1D
-End Type
-Private Type PointerAccessor
-    ptrs() As LongPtr
-    sa As SAFEARRAY_1D
-    isSet As Boolean
-End Type
-
-Private Enum CLPosition
-    posComp = 0
-    posLcid = 1
-End Enum
-
-'Both 'textHasher' and 'compLcid' will link into the default (Predeclared)
-'   instance of this class. This is necessary to avoid speed issues on the heap
-Private Type Hasher
+             
+'Data shared across all class instances
+Private Type Globals
 #If Windows Then
-    textHasher() As Collection
-    compLcid() As Long 'Will use CLPosition Enum to distinguish index
-    lcid As Long       'System localeID
-    cachedLcid As Long 'To avoid 'If' statement for mode >= vbTextCompare
-    defInstance As Dictionary 'Avoids deallocation of default (Predeclared) dict
+    sdl As ScrDictLayout
+    lcid As Long 'System localeID
     isScrAvailable As Boolean
 #End If
-    isSet As Boolean
-    ia As IntegerAccessor
+    saI As SAFEARRAY_1D
+    saP As SAFEARRAY_1D
     d As Double 'For hashing numbers
     dPtr As LongPtr
-#If Win64 Then
-    la As PointerAccessor
-#End If
 End Type
 
 Private Type Lookups
-    ByteShiftL(0 To GROUP_SIZE - 1) As LongPtr
-    ByteMask(0 To GROUP_SIZE - 1) As LongPtr
-    ByteOff(0 To GROUP_SIZE - 1) As LongPtr
-    PositionMask(0 To GROUP_SIZE - 2) As LongPtr
-    CountMask(0 To GROUP_SIZE) As LongPtr
-#If Win64 Then
+    ByteShiftL(0 To groupSize - 1) As LongPtr
+    ByteMask(0 To groupSize - 1) As LongPtr
+    ByteOff(0 To groupSize - 1) As LongPtr
+    PositionMask(0 To groupSize - 2) As LongPtr
+    CountMask(0 To groupSize) As LongPtr
+#If x64 Then
     ModBytePosition(0 To 15) As Long
     ExpPos(0 To 63) As LongLong 'Double Float Exponent Position
 #Else
@@ -292,26 +223,49 @@ Private Type EnumProvider
     hasEnum As Boolean
     emptyColl As New Collection
     enumsColl As New Collection
-    pa As PointerAccessor
+End Type
+
+'These will link into the default (Predeclared) instance of this class
+'This is necessary to avoid speed issues on the heap with fake Scripting Dict
+'Faster deallocation of memory by orders of magnitude when having many instances
+Private Type MemoryAccessors
+    Common() As Globals
+    Look() As Lookups
+    RInt() As Integer
+    RPtr() As LongPtr
+#If Windows Then
+    TextHash() As Collection
+#End If
+End Type
+
+Private Type DictionaryVariables
+    Hash As HashMap
+    Enums As EnumProvider
+    Compare As VbCompareMethod
+    LocaleID As Long
+    Items() As Variant
+#If x64 Then
+    Keys() As Variant
+    Meta() As Long
+#Else
+    Keys() As EnumerableVariant
+#End If
+    Count As Long
+    UBound As Long
+    UsedCount As Long
+    DefInstance As Dictionary 'Avoids deallocation of default (Predeclared) dict
+    IsInitialized As Boolean
 End Type
 
 'Class members
-Private m_compare As VbCompareMethod
-Private m_data As DataStorage
-Private m_enumProvider As EnumProvider
-Private m_fastUnorderedRemove As Boolean
-Private m_hash As HashMap
-Private m_hasher As Hasher
-Private m_isUnordered As Boolean
-Private m_lookups As Lookups
+Private Vars As DictionaryVariables
+Private Mem As MemoryAccessors
 
-'The 'NewEnum' method must always be the first method in the class so that it's
-'   virtual table position is known. This is because we want to fix the x64 bug
-'   when using a For Each.. loop:
+'NewEnum must be the first method so that it's virtual table position is known.
+'This is because we want to fix the x64 bug when using a For Each.. loop:
 'https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes
-'
-'Unfortunately we cannot use ITypeInfo::AddressOfMember because it overrides
-'   some assembly bytes:
+
+'Cannot use ITypeInfo::AddressOfMember because it overrides some assembly bytes:
 'https://stackoverflow.com/questions/65507735/address-of-class-method-crash-on-x64
 
 '@Enumerator
@@ -321,28 +275,27 @@ Attribute NewEnum.VB_UserMemId = -4
     Set NewEnum = DictEnum
 End Function
 
-Private Sub Init(Optional ByVal newGroupCount As Long = INITIAL_GROUP_COUNT)
+Private Sub Init(Optional ByVal newGroupCount As Long = initialGroupCount)
     InitHashMap newGroupCount
-    m_isUnordered = False
-    With m_data
+    With Vars
         .Count = 0
         .UsedCount = 0
-        .UBound = newGroupCount * GROUP_SIZE / 2 - 1
+        .UBound = newGroupCount * groupSize / 2 - 1
         ReDim .Items(0 To .UBound)
-    #If Win64 Then
+    #If x64 Then
         ReDim .Keys(0 To .UBound + 1) 'Extra member for safe IEnumVariant
         ReDim .Meta(0 To .UBound)
     #Else
         ReDim .Keys(0 To .UBound)
     #End If
     End With
-    If Not m_hasher.isSet Then
-        InitLookups
-        InitLocalHasher
+    If Not Vars.IsInitialized Then
+        Dictionary.InitStructs Vars, Mem
+        If Me Is Dictionary Then Set Vars.DefInstance = Nothing
     End If
-    Set m_enumProvider.emptyColl = Nothing 'Clear NextPtr in live IEnumVariant's
-    Set m_enumProvider.enumsColl = Nothing
-    m_enumProvider.hasEnum = False
+    Set Vars.Enums.emptyColl = Nothing 'Clear NextPtr in live IEnumVariant's
+    Set Vars.Enums.enumsColl = Nothing
+    Vars.Enums.hasEnum = False
 End Sub
 
 'Raises Error 457 if a duplicated key was specified
@@ -353,82 +306,84 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
     Dim controlByte As Long
     '
     i = GetIndex(Key, hVal, groupSlot, controlByte)
-    If i > NOT_FOUND Then Err.Raise 457, TypeName(Me) & ".Add"
+    If i > notFound Then Err.Raise 457, TypeName(Me) & ".Add"
     '
-    If m_data.Count > m_data.UBound Then
-        m_data.UBound = m_data.UBound * 2 + 1
-        ReDim Preserve m_data.Items(0 To m_data.UBound)
+    If Vars.Count > Vars.UBound Then
+        Vars.UBound = Vars.UBound * 2 + 1
+        ReDim Preserve Vars.Items(0 To Vars.UBound)
         '
-        If m_enumProvider.hasEnum Then
-            Dim ptr As LongPtr: ptr = VarPtr(m_data.Keys(0))
+        If Vars.Enums.hasEnum Then
+            Dim ptr As LongPtr: ptr = VarPtr(Vars.Keys(0))
             RemoveUnusedEnums
         End If
-        #If Win64 Then 'Extra member for safe IEnumVariant
-            ReDim Preserve m_data.Keys(0 To m_data.UBound + 1)
-            ReDim Preserve m_data.Meta(0 To m_data.UBound)
+        #If x64 Then 'Extra member for safe IEnumVariant
+            ReDim Preserve Vars.Keys(0 To Vars.UBound + 1)
+            ReDim Preserve Vars.Meta(0 To Vars.UBound)
         #Else
-            ReDim Preserve m_data.Keys(0 To m_data.UBound)
+            ReDim Preserve Vars.Keys(0 To Vars.UBound)
         #End If
-        If m_enumProvider.hasEnum Then
-            ShiftEnumPointers VarPtr(m_data.Keys(0)) - ptr
+        If Vars.Enums.hasEnum Then
+            ShiftEnumPointers VarPtr(Vars.Keys(0)) - ptr
         End If
     End If
-    i = m_data.Count
-    m_data.Count = m_data.Count + 1
-    m_data.UsedCount = m_data.UsedCount + 1
-    If m_data.UsedCount > m_hash.MaxLoad Then
-        Rehash m_hash.GroupCount * 2
-        groupSlot = hVal Mod m_hash.GroupCount
-        Do While m_hash.Groups(groupSlot).WasEverFull 'Unlikely after rehash
-             groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
+    i = Vars.Count
+    Vars.Count = Vars.Count + 1
+    Vars.UsedCount = Vars.UsedCount + 1
+    If Vars.UsedCount > Vars.Hash.MaxLoad Then
+        Rehash Vars.Hash.GroupCount * 2
+        groupSlot = hVal Mod Vars.Hash.GroupCount
+        Do While Vars.Hash.Groups(groupSlot).WasEverFull 'Unlikely after rehash
+             groupSlot = (groupSlot + 1) Mod Vars.Hash.GroupCount
         Loop
-        controlByte = (hVal And m_hash.ControlMask) \ m_hash.GroupCount
-    ElseIf m_hash.Groups(groupSlot).Count = GROUP_SIZE Then
+        controlByte = (hVal And Vars.Hash.ControlMask) \ Vars.Hash.GroupCount
+    ElseIf Vars.Hash.Groups(groupSlot).Count = groupSize Then
         'This can only happen if ClearMapIndex was previously called
-        groupSlot = hVal Mod m_hash.GroupCount
-        Do While m_hash.Groups(groupSlot).Count = GROUP_SIZE
-             groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
+        groupSlot = hVal Mod Vars.Hash.GroupCount
+        Do While Vars.Hash.Groups(groupSlot).Count = groupSize
+             groupSlot = (groupSlot + 1) Mod Vars.Hash.GroupCount
         Loop
     End If
     '
-    With m_hash.Groups(groupSlot)
+    With Vars.Hash.Groups(groupSlot)
         .Index(.Count) = i
-        .Control = .Control Or (controlByte * m_lookups.ByteShiftL(.Count))
+        .Control = .Control Or (controlByte * Mem.Look(0).ByteShiftL(.Count))
         .Count = .Count + 1
-        .WasEverFull = .WasEverFull Or (.Count = GROUP_SIZE)
+        .WasEverFull = .WasEverFull Or (.Count = groupSize)
     End With
     '
-#If Win64 Then
-    If hVal And hmObject Then Set m_data.Keys(i) = Key Else m_data.Keys(i) = Key
-    If m_enumProvider.hasEnum Then
+#If x64 Then
+    If hVal And hmObject Then Set Vars.Keys(i) = Key Else Vars.Keys(i) = Key
+    If Vars.Enums.hasEnum Then
         RemoveUnusedEnums
         If i > 0 Then
-            ptr = VarPtr(m_data.Keys(i))
-            m_enumProvider.pa.sa.pvData = ptr
-            m_enumProvider.pa.sa.rgsabound0.cElements = 3
-            m_enumProvider.pa.ptrs(2) = ptr
+            ptr = VarPtr(Vars.Keys(i))
+            With Mem.Common(0)
+                .saP.pvData = ptr + nextItemOffset
+                Mem.RPtr(0) = ptr
+                .saP.pvData = .dPtr
+            End With
         End If
     End If
     If IsObject(Item) Then
-        m_data.Meta(i) = hVal Or IS_ITEM_OBJ
-        Set m_data.Items(i) = Item
+        Vars.Meta(i) = hVal Or isItemObjBit
+        Set Vars.Items(i) = Item
     Else
-        m_data.Meta(i) = hVal
-        m_data.Items(i) = Item
+        Vars.Meta(i) = hVal
+        Vars.Items(i) = Item
     End If
 #Else
-    With m_data.Keys(i)
+    With Vars.Keys(i)
         .IsKeyObj = CBool(hVal And hmObject)
         If .IsKeyObj Then Set .Value = Key Else .Value = Key
-        If m_enumProvider.hasEnum Then
+        If Vars.Enums.hasEnum Then
             RemoveUnusedEnums
-            If i > 0 Then m_data.Keys(i - 1).NextPtr = VarPtr(.Value)
+            If i > 0 Then Vars.Keys(i - 1).NextPtr = VarPtr(.Value)
         End If
         .IsItemObj = IsObject(Item)
         If .IsItemObj Then
-            Set m_data.Items(i) = Item
+            Set Vars.Items(i) = Item
         Else
-            m_data.Items(i) = Item
+            Vars.Items(i) = Item
         End If
         .Meta = hVal
     End With
@@ -443,34 +398,34 @@ Private Sub Rehash(ByVal newGroupCount As Long)
     Dim i As Long
     '
     InitHashMap newGroupCount
-    For i = 0 To m_data.Count - 1
-        #If Win64 Then
-            hVal = m_data.Meta(i)
+    For i = 0 To Vars.Count - 1
+        #If x64 Then
+            hVal = Vars.Meta(i)
         #Else
-            hVal = m_data.Keys(i).Meta
+            hVal = Vars.Keys(i).Meta
         #End If
         If hVal <> hmRemoved Then
-            groupSlot = hVal And m_hash.GroupMask
-            Do While m_hash.Groups(groupSlot).WasEverFull 'Unlikely after resize
-                groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
+            groupSlot = hVal And Vars.Hash.GroupMask
+            Do While Vars.Hash.Groups(groupSlot).WasEverFull 'Unlikely (resized)
+                groupSlot = (groupSlot + 1) Mod Vars.Hash.GroupCount
             Loop
-            With m_hash.Groups(groupSlot)
+            With Vars.Hash.Groups(groupSlot)
                 .Index(.Count) = i
-                ctrlByte = (hVal And m_hash.ControlMask) \ m_hash.GroupCount
-                .Control = .Control Or (ctrlByte * m_lookups.ByteShiftL(.Count))
+                ctrlByte = (hVal And Vars.Hash.ControlMask) \ Vars.Hash.GroupCount
+                .Control = .Control Or (ctrlByte * Mem.Look(0).ByteShiftL(.Count))
                 .Count = .Count + 1
-                .WasEverFull = .WasEverFull Or (.Count = GROUP_SIZE)
+                .WasEverFull = .WasEverFull Or (.Count = groupSize)
             End With
         End If
     Next i
 End Sub
 Private Sub InitHashMap(ByVal newGroupCount As Long)
-    m_hash.GroupCount = newGroupCount
-    ReDim m_hash.Groups(0 To m_hash.GroupCount - 1)
-    m_hash.MaxLoad = m_hash.GroupCount * GROUP_SIZE * MAX_LOAD_FACTOR
-    m_hash.GroupMask = m_hash.GroupCount - 1
-    '&H80& bit cannot be multiplied with BYTE_BROADCAST without causing overflow
-    m_hash.ControlMask = m_hash.GroupCount * &H7F&
+    Vars.Hash.GroupCount = newGroupCount
+    ReDim Vars.Hash.Groups(0 To Vars.Hash.GroupCount - 1)
+    Vars.Hash.MaxLoad = Vars.Hash.GroupCount * groupSize * MaxLoadFactor
+    Vars.Hash.GroupMask = Vars.Hash.GroupCount - 1
+    '&H80& bit cannot be multiplied with byteBroadcast without causing overflow
+    Vars.Hash.ControlMask = Vars.Hash.GroupCount * &H7F&
 End Sub
 
 'Returns non-zero data index if key is found
@@ -496,7 +451,10 @@ Private Function GetIndex(ByRef Key As Variant _
                         , Optional ByRef controlByte As Long _
                         , Optional ByRef posInGroup As Long _
                         , Optional ByVal hashOnly As Boolean = False) As Long
-    If m_hash.GroupCount = 0 Then Init
+    #If (x32) Or Mac Then
+        Const vbLongLong = 20
+    #End If
+    If Vars.Hash.GroupCount = 0 Then Init
     Dim vt As VbVarType
     Dim i As Long
     '
@@ -505,57 +463,55 @@ Private Function GetIndex(ByRef Key As Variant _
     If vt = vbString Then
         Const tPrime As Long = 131&
         Const tOverflowMask As Long = &H7FFFFF
+        With Mem.Common(0)
 #If Windows Then
-        If m_hasher.isScrAvailable Then
-            Const minLenBinary As Long = 6
-            If m_compare = vbBinaryCompare Then
-                m_hasher.ia.sa.rgsabound0.cElements = Len(Key)
-                If minLenBinary < m_hasher.ia.sa.rgsabound0.cElements Then
-                    m_hasher.compLcid(posComp) = vbBinaryCompare
-                    hVal = m_hasher.textHasher(0).Item(Key) Or hmText 'Early-binded
-                Else 'Faster to loop integers
-                    m_hasher.ia.sa.pvData = StrPtr(Key)
-                    With m_hasher.ia
-                        For i = 0 To m_hasher.ia.sa.rgsabound0.cElements - 1
-                            hVal = (hVal And tOverflowMask) * tPrime + .ints(i)
+            If .isScrAvailable Then
+                Const minLenBinary As Long = 6
+                If Vars.Compare = vbBinaryCompare Then
+                    .saI.rgsabound0.cElements = Len(Key)
+                    If minLenBinary < .saI.rgsabound0.cElements Then
+                        .sdl.compMode = vbBinaryCompare
+                        hVal = Mem.TextHash(0)(Key) Or hmText 'Early-binded
+                    Else 'Faster to loop integers
+                        .saI.pvData = StrPtr(Key)
+                        For i = 0 To .saI.rgsabound0.cElements - 1
+                            hVal = (hVal And tOverflowMask) * tPrime + Mem.RInt(i)
                         Next i
-                    End With
-                    hVal = hVal And [_maskHM] Or hmText
-                    m_hasher.ia.sa.rgsabound0.cElements = INTS_IN_DOUBLE
-                    m_hasher.ia.sa.pvData = m_hasher.dPtr
+                        hVal = hVal And [_maskHM] Or hmText
+                        .saI.rgsabound0.cElements = intsPerDouble
+                        .saI.pvData = .dPtr
+                    End If
+                Else
+                    .sdl.compMode = vbTextCompare
+                    .sdl.lcid = Vars.LocaleID
+                    hVal = Mem.TextHash(0)(Key) Or hmText 'Early-binded
                 End If
             Else
-                m_hasher.compLcid(posComp) = vbTextCompare
-                m_hasher.compLcid(posLcid) = m_hasher.cachedLcid
-                hVal = m_hasher.textHasher(0).Item(Key) Or hmText 'Early-binded
-            End If
-        Else
 #End If
-            m_hasher.ia.sa.rgsabound0.cElements = Len(Key)
-            If m_compare = vbBinaryCompare Then
-                m_hasher.ia.sa.pvData = StrPtr(Key)
-            Else
-                Dim s As String: s = LCase$(Key)
-                m_hasher.ia.sa.pvData = StrPtr(s)
-            End If
-            With m_hasher.ia
-                For i = 0 To m_hasher.ia.sa.rgsabound0.cElements - 1
-                    hVal = (hVal And tOverflowMask) * tPrime + .ints(i)
+                .saI.rgsabound0.cElements = Len(Key)
+                If Vars.Compare = vbBinaryCompare Then
+                    .saI.pvData = StrPtr(Key)
+                Else
+                    Dim s As String: s = LCase$(Key)
+                    .saI.pvData = StrPtr(s)
+                End If
+                For i = 0 To .saI.rgsabound0.cElements - 1
+                    hVal = (hVal And tOverflowMask) * tPrime + Mem.RInt(i)
                 Next i
-            End With
-            hVal = hVal And [_maskHM] Or hmText
-            m_hasher.ia.sa.rgsabound0.cElements = INTS_IN_DOUBLE
-            m_hasher.ia.sa.pvData = m_hasher.dPtr
+                hVal = hVal And [_maskHM] Or hmText
+                .saI.rgsabound0.cElements = intsPerDouble
+                .saI.pvData = .dPtr
 #If Windows Then
-        End If
+            End If
 #End If
+        End With
     ElseIf vt = vbObject Or vt = vbDataObject Then
         Const oPrime As Long = 2701&
         Static iUnk As stdole.IUnknown 'Dim is slower
         '
         vt = vbObject 'Replace vbDataObject if needed
         Set iUnk = Key
-        #If Win64 Then
+        #If x64 Then
             Const oPreMask As LongLong = &H6FFFFFFFFFFFFFFF^
             Dim ll As LongLong
             ll = ObjPtr(iUnk) And oPreMask
@@ -566,43 +522,41 @@ Private Function GetIndex(ByRef Key As Variant _
             hVal = ObjPtr(iUnk) And oPreMask
             hVal = (hVal + hVal Mod oPrime) And [_maskHM] Or hmObject
         #End If
-        Set iUnk = Nothing 'Must call because of Static but still faster
+        Set iUnk = Nothing 'Because of Static but still faster than just Dim
     ElseIf vt > vbLongLong Then
         Err.Raise 5, , "Cannot hash an Array or User Defined Type"
     ElseIf vt > vbNull Then
         Dim m As HashMeta
         If vt = vbError Then
             m = hmError
-            m_hasher.d = CDbl(Key)
+            Mem.Common(0).d = CDbl(Key)
         Else
             m = hmNumber
-            m_hasher.d = Key
+            Mem.Common(0).d = Key
         End If
         Const n1& = 1201, n2& = 2701, n3& = 131, n4& = 28571
         Const infOrNaN As Integer = &H7FF0 'Exponent bits for Double Float
-        #If Win64 Then
+        #If x64 Then
             Const maskLL As LongLong = HashMeta.[_maskHM]
             Const iSignBit As Integer = &H8000
             Const factionalBits As LongLong = &HFFFFFFFFFFFFF^
             Const normalBit As LongLong = factionalBits + 1
             Dim h As LongLong, bitFinder As LongLong
-            Dim highBits As Integer: highBits = m_hasher.ia.ints(3)
+            Dim highBits As Integer: highBits = Mem.RInt(3)
             '
             If (highBits And infOrNaN) = infOrNaN Then
-                hVal = (highBits * n1 + m_hasher.ia.ints(0) * n4) And [_maskHM]
+                hVal = (highBits * n1 + Mem.RInt(0) * n4) And [_maskHM]
             Else
-                h = m_hasher.la.ptrs(0) And factionalBits Or normalBit
-                bitFinder = h Or m_lookups.ExpPos((highBits And &H3F0) \ &H10)
+                h = Mem.RPtr(0) And factionalBits Or normalBit
+                bitFinder = h Or Mem.Look(0).ExpPos((highBits And &H3F0) \ &H10)
                 h = h \ (bitFinder And -bitFinder)
                 If highBits And iSignBit Then h = Not h - 1
                 hVal = CLng(h And maskLL) Or m
             End If
         #Else
-            With m_hasher.ia
-                If (.ints(3) And infOrNaN) = infOrNaN Then m = 0
-                hVal = (.ints(0) * n4 + .ints(1) * n3 _
-                      + .ints(2) * n2 + .ints(3) * n1) And [_maskHM] Or m
-            End With
+            If (Mem.RInt(3) And infOrNaN) = infOrNaN Then m = 0
+            hVal = (Mem.RInt(0) * n4 + Mem.RInt(1) * n3 _
+                  + Mem.RInt(2) * n2 + Mem.RInt(3) * n1) And [_maskHM] Or m
         #End If
     Else
         hVal = vt 'vbEmpty (0) or vbNull (1)
@@ -610,114 +564,110 @@ Private Function GetIndex(ByRef Key As Variant _
     If hashOnly Then Exit Function
     '
     'Calculate sub-hashes
-    groupSlot = hVal Mod m_hash.GroupCount
-    controlByte = (hVal And m_hash.ControlMask) \ m_hash.GroupCount
+    groupSlot = hVal Mod Vars.Hash.GroupCount
+    controlByte = (hVal And Vars.Hash.ControlMask) \ Vars.Hash.GroupCount
     '
+    #If x64 Then
+        Const signBit As LongLong = &H8000000000000000^
+        Const highBitOff As LongLong = &H7F7F7F7F7F7F7F7F^ 'Bit Off Per Each Byte
+        Const nHighBitOff As LongLong = highBitOff Or signBit
+        Const byteBroadcast As LongLong = &H101010101010101^
+        Const positionPrime As LongLong = 19
+    #Else
+        Const signBit As Long = &H80000000
+        Const highBitOff As Long = &H7F7F7F7F
+        Const nHighBitOff As Long = highBitOff Or signBit
+        Const byteBroadcast As Long = &H1010101
+        Const positionPrime As Long = 7
+    #End If
     Dim matches As LongPtr
     Dim cMask As LongPtr
     Dim startSlot As Long: startSlot = groupSlot
     Do
-        With m_hash.Groups(groupSlot)
-            cMask = m_lookups.CountMask(.Count)
+        With Vars.Hash.Groups(groupSlot)
+            cMask = Mem.Look(0).CountMask(.Count)
             'Match bytes adapted from:
             'https://graphics.stanford.edu/~seander/bithacks.html#ZeroInWord
-            matches = .Control Xor (controlByte * BYTE_BROADCAST)
-            matches = ((((matches And HIGH_BIT_OFF) + NHIGH_BIT_OFF) _
-                    Xor SIGN_BIT) Or matches) And cMask Xor cMask
+            matches = .Control Xor (controlByte * byteBroadcast)
+            matches = ((((matches And highBitOff) + nHighBitOff) _
+                    Xor signBit) Or matches) And cMask Xor cMask
             Do While matches
-                If matches = SIGN_BIT Then 'Matched last element only
-                    posInGroup = GROUP_SIZE - 1
+                If matches = signBit Then 'Matched last element only
+                    posInGroup = groupSize - 1
                     matches = 0
                 Else 'Find next match within group
-                    posInGroup = m_lookups.ModBytePosition(CLng( _
-                                 (-matches And matches) Mod POSITION_PRIME))
-                    matches = matches Xor m_lookups.PositionMask(posInGroup)
+                    posInGroup = Mem.Look(0).ModBytePosition(CLng( _
+                                 (-matches And matches) Mod positionPrime))
+                    matches = matches Xor Mem.Look(0).PositionMask(posInGroup)
                 End If
                 GetIndex = .Index(posInGroup)
-#If Win64 Then
-                If (m_data.Meta(GetIndex) And KEY_MASK) = hVal Then
-                    If vt = vbString And (m_compare > vbBinaryCompare) Then
-                        If StrComp(m_data.Keys(GetIndex) _
-                                 , Key, m_compare) = 0 Then Exit Function
+#If x64 Then
+                If (Vars.Meta(GetIndex) And keyBitMask) = hVal Then
+                    If vt = vbString And (Vars.Compare > vbBinaryCompare) Then
+                        If StrComp(Vars.Keys(GetIndex) _
+                                 , Key, Vars.Compare) = 0 Then Exit Function
                     ElseIf vt = vbObject Then 'vbDataObject was replaced
-                        If m_data.Keys(GetIndex) Is Key Then Exit Function
+                        If Vars.Keys(GetIndex) Is Key Then Exit Function
                     ElseIf hVal < HashMeta.[_modHM] Then 'Already matched
                         Exit Function
                     Else 'Number, Error or case-sensitive Text
-                        If m_data.Keys(GetIndex) = Key Then Exit Function
+                        If Vars.Keys(GetIndex) = Key Then Exit Function
                     End If
                 End If
 #Else
-                If m_data.Keys(GetIndex).Meta = hVal Then
-                    If vt = vbString And (m_compare > vbBinaryCompare) Then
-                        If StrComp(m_data.Keys(GetIndex).Value _
-                                 , Key, m_compare) = 0 Then Exit Function
+                If Vars.Keys(GetIndex).Meta = hVal Then
+                    If vt = vbString And (Vars.Compare > vbBinaryCompare) Then
+                        If StrComp(Vars.Keys(GetIndex).Value _
+                                 , Key, Vars.Compare) = 0 Then Exit Function
                     ElseIf vt = vbObject Then 'vbDataObject was replaced
-                        If m_data.Keys(GetIndex).Value Is Key Then Exit Function
+                        If Vars.Keys(GetIndex).Value Is Key Then Exit Function
                     ElseIf hVal < HashMeta.[_modHM] Then 'Already matched
                         Exit Function
                     Else 'Number, Error or case-sensitive Text
-                        If m_data.Keys(GetIndex).Value = Key Then Exit Function
+                        If Vars.Keys(GetIndex).Value = Key Then Exit Function
                     End If
                 End If
 #End If
             Loop
             If Not .WasEverFull Then Exit Do
         End With
-        groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
+        groupSlot = (groupSlot + 1) Mod Vars.Hash.GroupCount
     Loop Until groupSlot = startSlot
-    GetIndex = NOT_FOUND
+    GetIndex = notFound
 End Function
 
 'Values greater than 2 can be used to compare using specific Locale IDs (LCID)
 'https://learn.microsoft.com/en-us/office/vba/Language/Reference/User-Interface-Help/comparemode-property
 'Can only be changed if there are no stored items
 Public Property Get CompareMode() As VbCompareMethod
-    CompareMode = m_compare
+    CompareMode = Vars.Compare
 End Property
 Public Property Let CompareMode(ByVal compMode As VbCompareMethod)
     Const minMode As Long = 0
     Const maxMode As Long = 31890 'Same as StrComp limits
     '
-    If m_data.UsedCount > 0 And compMode <> m_compare Then
+    If Vars.UsedCount > 0 And compMode <> Vars.Compare Then
         Err.Raise 5, TypeName(Me) & ".CompareMode", "Dict already contains data"
     ElseIf compMode < minMode Or compMode > maxMode Then
         Err.Raise 5, TypeName(Me) & ".CompareMode", "Invalid compare method"
     End If
-    m_compare = compMode
+    Vars.Compare = compMode
 #If Windows Then
-    If m_compare > vbTextCompare Then
-        m_hasher.cachedLcid = m_compare
-    Else
-        m_hasher.cachedLcid = m_hasher.lcid
+    If Vars.Compare > vbTextCompare Then
+        Vars.LocaleID = Vars.Compare
+    ElseIf Vars.IsInitialized Then
+        Vars.LocaleID = Mem.Common(0).lcid
     End If
 #End If
 End Property
 
 Public Property Get Count() As Long
-    Count = m_data.UsedCount
-End Property
-
-'Can only be changed if there are no stored items
-'When set to True, the order in which the Items/Keys were added via 'Add' is no
-'   longer preserved to facilitate faster 'Items' and 'Keys' calls
-Public Property Get FastUnorderedRemove() As Boolean
-    FastUnorderedRemove = m_fastUnorderedRemove
-End Property
-Public Property Let FastUnorderedRemove(ByVal fastOn As Boolean)
-    If m_data.UsedCount > 0 And fastOn <> m_fastUnorderedRemove Then
-        Err.Raise 5, TypeName(Me) & ".CompareMode", "Dict already contains data"
-    End If
-    m_fastUnorderedRemove = fastOn
+    Count = Vars.UsedCount
 End Property
 
 Public Function Exists(ByRef Key As Variant) As Boolean
-    Exists = (GetIndex(Key) > NOT_FOUND)
+    Exists = (GetIndex(Key) > notFound)
 End Function
-
-Public Property Get IsOrdered() As Boolean
-    IsOrdered = Not m_isUnordered
-End Property
 
 'Raises Error:
 '   -    9: invalid key (key is not associated with any element)
@@ -728,16 +678,16 @@ Attribute Item.VB_UserMemId = 0
 'Attribute Item.VB_UserMemId = 0
     Dim i As Long: i = GetIndex(Key)
     '
-    'A check like i = NOT_FOUND is avoided for speed purposes
+    'A check like i = notFound is avoided for speed purposes
     '   because error 9 is raised anyway when accessing the data arrays
-#If Win64 Then
-    If m_data.Meta(i) And IS_ITEM_OBJ Then
+#If x64 Then
+    If Vars.Meta(i) And isItemObjBit Then
 #Else
-    If m_data.Keys(i).IsItemObj Then
+    If Vars.Keys(i).IsItemObj Then
 #End If
-        Set Item = m_data.Items(i)
+        Set Item = Vars.Items(i)
     Else
-        Item = m_data.Items(i)
+        Item = Vars.Items(i)
     End If
 End Property
 Public Property Let Item(ByRef Key As Variant, ByRef Item As Variant)
@@ -745,63 +695,63 @@ Public Property Let Item(ByRef Key As Variant, ByRef Item As Variant)
         Err.Raise 450, TypeName(Me) & ".Item", "'Set' is required"
     End If
     Dim i As Long: i = GetIndex(Key)
-    If i > NOT_FOUND Then
-        #If Win64 Then
-            m_data.Meta(i) = m_data.Meta(i) And KEY_MASK
+    If i > notFound Then
+        #If x64 Then
+            Vars.Meta(i) = Vars.Meta(i) And keyBitMask
         #Else
-            m_data.Keys(i).IsItemObj = False
+            Vars.Keys(i).IsItemObj = False
         #End If
-        m_data.Items(i) = Item
+        Vars.Items(i) = Item
     Else
         Add Key, Item
     End If
 End Property
 Public Property Set Item(ByRef Key As Variant, ByRef Item As Object)
     Dim i As Long: i = GetIndex(Key)
-    If i > NOT_FOUND Then
-        #If Win64 Then
-            m_data.Meta(i) = m_data.Meta(i) Or IS_ITEM_OBJ
+    If i > notFound Then
+        #If x64 Then
+            Vars.Meta(i) = Vars.Meta(i) Or isItemObjBit
         #Else
-            m_data.Keys(i).IsItemObj = True
+            Vars.Keys(i).IsItemObj = True
         #End If
-        Set m_data.Items(i) = Item
+        Set Vars.Items(i) = Item
     Else
         Add Key, Item
     End If
 End Property
 
-Public Function Items() As Variant()
-    If m_data.UsedCount = 0 Then
+Public Property Get Items() As Variant()
+    If Vars.UsedCount = 0 Then
         Items = Array()
-        Exit Function
+        Exit Property
     End If
-    If m_data.UsedCount = m_data.Count Then
-        Items = m_data.Items
-        ReDim Preserve Items(0 To m_data.Count - 1)
+    If Vars.UsedCount = Vars.Count Then
+        Items = Vars.Items
+        ReDim Preserve Items(0 To Vars.Count - 1)
     Else
         Dim res() As Variant
-        ReDim res(0 To m_data.UsedCount - 1)
+        ReDim res(0 To Vars.UsedCount - 1)
         Dim i As Long
         Dim j As Long
         '
-        For i = 0 To m_data.Count - 1
-#If Win64 Then
-            If m_data.Meta(i) <> hmRemoved Then
-                If m_data.Meta(i) And IS_ITEM_OBJ Then
+        For i = 0 To Vars.Count - 1
+#If x64 Then
+            If Vars.Meta(i) <> hmRemoved Then
+                If Vars.Meta(i) And isItemObjBit Then
 #Else
-            If m_data.Keys(i).Meta <> hmRemoved Then
-                If m_data.Keys(i).IsItemObj Then
+            If Vars.Keys(i).Meta <> hmRemoved Then
+                If Vars.Keys(i).IsItemObj Then
 #End If
-                    Set res(j) = m_data.Items(i)
+                    Set res(j) = Vars.Items(i)
                 Else
-                    res(j) = m_data.Items(i)
+                    res(j) = Vars.Items(i)
                 End If
                 j = j + 1
             End If
         Next i
         Items = res
     End If
-End Function
+End Property
 
 'Change an existing key value
 'Raises Error:
@@ -814,30 +764,31 @@ Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     Dim controlByte As Long
     Dim i As Long
     '
-    If GetIndex(NewKey, hVal, , controlByte) > NOT_FOUND Then Err.Raise 457
+    If GetIndex(NewKey, hVal, , controlByte) > notFound Then Err.Raise 457
     i = GetIndex(OldKey, , groupSlot, , posInGroup)
     '
-    'A check like i = NOT_FOUND is avoided for speed purposes
+    'A check like i = notFound is avoided for speed purposes
     '   because error 9 is raised anyway when accessing the Keys array
     '
     'Replace Key and Meta while preserving Item
-#If Win64 Then
-    If m_enumProvider.hasEnum Then
+#If x64 Then
+    Dim isObj As Boolean: isObj = CBool(hVal And HashMeta.hmObject)
+    If Vars.Enums.hasEnum Then
         RemoveUnusedEnums
-        m_enumProvider.pa.sa.pvData = VarPtr(m_data.Keys(i))
-        m_enumProvider.pa.sa.rgsabound0.cElements = 3
-        Dim ptr As LongPtr: ptr = m_enumProvider.pa.ptrs(2)
-    End If
-    If hVal And HashMeta.hmObject Then
-        Set m_data.Keys(i) = NewKey
+        With Mem.Common(0)
+            .saP.pvData = VarPtr(Vars.Keys(i)) + nextItemOffset
+            Dim ptr As LongPtr: ptr = Mem.RPtr(0)
+            If isObj Then Set Vars.Keys(i) = NewKey Else Vars.Keys(i) = NewKey
+            Mem.RPtr(0) = ptr
+            .saP.pvData = .dPtr
+        End With
     Else
-        m_data.Keys(i) = NewKey
+        If isObj Then Set Vars.Keys(i) = NewKey Else Vars.Keys(i) = NewKey
     End If
-    If m_enumProvider.hasEnum Then m_enumProvider.pa.ptrs(2) = ptr
-    If m_data.Meta(i) And IS_ITEM_OBJ Then hVal = hVal Or IS_ITEM_OBJ
-    m_data.Meta(i) = hVal
+    If Vars.Meta(i) And isItemObjBit Then hVal = hVal Or isItemObjBit
+    Vars.Meta(i) = hVal
 #Else
-    With m_data.Keys(i)
+    With Vars.Keys(i)
         .IsKeyObj = CBool(hVal And HashMeta.hmObject)
         If .IsKeyObj Then Set .Value = NewKey Else .Value = NewKey
         .Meta = hVal
@@ -847,57 +798,57 @@ Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     ClearMapIndex groupSlot, posInGroup
     '
     'Update hash map with new key
-    groupSlot = hVal And m_hash.GroupMask
-    Do While m_hash.Groups(groupSlot).Count = GROUP_SIZE
-         groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
+    groupSlot = hVal And Vars.Hash.GroupMask
+    Do While Vars.Hash.Groups(groupSlot).Count = groupSize
+         groupSlot = (groupSlot + 1) Mod Vars.Hash.GroupCount
     Loop
-    With m_hash.Groups(groupSlot)
+    With Vars.Hash.Groups(groupSlot)
         .Index(.Count) = i
-        .Control = .Control Or (controlByte * m_lookups.ByteShiftL(.Count))
+        .Control = .Control Or (controlByte * Mem.Look(0).ByteShiftL(.Count))
         .Count = .Count + 1
-        .WasEverFull = .WasEverFull Or (.Count = GROUP_SIZE)
+        .WasEverFull = .WasEverFull Or (.Count = groupSize)
     End With
 End Property
 
 Private Sub ClearMapIndex(ByRef groupSlot As Long, ByRef posInGroup As Long)
     Dim lastPos As Long
     '
-    With m_hash.Groups(groupSlot)
+    With Vars.Hash.Groups(groupSlot)
         lastPos = .Count - 1
         If posInGroup < lastPos Then 'Swap
             .Index(posInGroup) = .Index(lastPos)
-            .Control = .Control And m_lookups.ByteOff(posInGroup)
-            .Control = .Control Or ((.Control And m_lookups.ByteMask(lastPos)) _
-                                   \ m_lookups.ByteShiftL(lastPos - posInGroup))
+            .Control = .Control And Mem.Look(0).ByteOff(posInGroup)
+            .Control = .Control Or ((.Control And Mem.Look(0).ByteMask(lastPos)) _
+                                   \ Mem.Look(0).ByteShiftL(lastPos - posInGroup))
         End If
         .Index(lastPos) = 0
-        .Control = .Control And m_lookups.ByteOff(lastPos)
+        .Control = .Control And Mem.Look(0).ByteOff(lastPos)
         .Count = .Count - 1
     End With
 End Sub
 
-Public Function Keys() As Variant()
-    If m_data.UsedCount = 0 Then
+Public Property Get Keys() As Variant()
+    If Vars.UsedCount = 0 Then
         Keys = Array()
-        Exit Function
+        Exit Property
     End If
     '
     Dim res() As Variant
     Dim i As Long
     Dim j As Long
     '
-#If Win64 Then
-    If m_data.UsedCount = m_data.Count Then
-        Keys = m_data.Keys
-        ReDim Preserve Keys(0 To m_data.Count - 1)
+#If x64 Then
+    If Vars.UsedCount = Vars.Count Then
+        Keys = Vars.Keys
+        ReDim Preserve Keys(0 To Vars.Count - 1)
     Else
-        ReDim res(0 To m_data.UsedCount - 1)
-        For i = 0 To m_data.Count - 1
-            If m_data.Meta(i) <> hmRemoved Then
-                If m_data.Meta(i) And hmObject Then
-                    Set res(j) = m_data.Keys(i)
+        ReDim res(0 To Vars.UsedCount - 1)
+        For i = 0 To Vars.Count - 1
+            If Vars.Meta(i) <> hmRemoved Then
+                If Vars.Meta(i) And hmObject Then
+                    Set res(j) = Vars.Keys(i)
                 Else
-                    res(j) = m_data.Keys(i)
+                    res(j) = Vars.Keys(i)
                 End If
                 j = j + 1
             End If
@@ -905,9 +856,9 @@ Public Function Keys() As Variant()
         Keys = res
     End If
 #Else
-    ReDim res(0 To m_data.UsedCount - 1)
-    For i = 0 To m_data.Count - 1
-        With m_data.Keys(i)
+    ReDim res(0 To Vars.UsedCount - 1)
+    For i = 0 To Vars.Count - 1
+        With Vars.Keys(i)
             If .Meta <> hmRemoved Then
                 If .IsKeyObj Then Set res(j) = .Value Else res(j) = .Value
                 j = j + 1
@@ -916,20 +867,20 @@ Public Function Keys() As Variant()
     Next i
     Keys = res
 #End If
-End Function
+End Property
 
 Public Sub PredictCount(ByVal expectedCount As Long)
-    Const maxGroups As Long = HashMeta.[_modHM] / GROUP_SIZE
+    Const maxGroups As Long = HashMeta.[_modHM] / groupSize
     Dim expectedGroups As Long
     '
     If expectedCount <= 0 Then Exit Sub
-    expectedGroups = 2 ^ -Int(-(Log(expectedCount / GROUP_SIZE) _
-                              + Log(1 / MAX_LOAD_FACTOR)) / Log(2))
+    expectedGroups = 2 ^ -Int(-(Log(expectedCount / groupSize) _
+                              + Log(1 / MaxLoadFactor)) / Log(2))
     If expectedGroups > maxGroups Then expectedGroups = maxGroups
     '
-    If m_hash.GroupCount = 0 Then
-        If expectedGroups > INITIAL_GROUP_COUNT Then Init expectedGroups
-    ElseIf expectedGroups > m_hash.GroupCount * 2 Then
+    If Vars.Hash.GroupCount = 0 Then
+        If expectedGroups > initialGroupCount Then Init expectedGroups
+    ElseIf expectedGroups > Vars.Hash.GroupCount * 2 Then
         Rehash expectedGroups
     End If
 End Sub
@@ -947,138 +898,84 @@ Public Sub Remove(ByRef Key As Variant)
     Dim ptr As LongPtr
     '
     i = GetIndex(Key, , groupSlot, , posInGroup)
-    If i = NOT_FOUND Then Err.Raise 9, TypeName(Me) & ".Remove"
-    If m_data.UsedCount = 1 Then
+    If i = notFound Then Err.Raise 9, TypeName(Me) & ".Remove"
+    If Vars.UsedCount = 1 Then
         Init
         Exit Sub
     End If
     '
     ClearMapIndex groupSlot, posInGroup
     '
-    lastPos = m_data.Count - 1
-    m_data.UsedCount = m_data.UsedCount - 1
+    lastPos = Vars.Count - 1
+    Vars.UsedCount = Vars.UsedCount - 1
     If i < lastPos Then
-        If m_fastUnorderedRemove Then
-            m_isUnordered = True
-            'Swap data
-            #If Win64 Then
-                hVal = m_data.Meta(lastPos)
-                If hVal And IS_ITEM_OBJ Then
-                    Set m_data.Items(i) = m_data.Items(lastPos)
-                Else
-                    m_data.Items(i) = m_data.Items(lastPos)
-                End If
-                If m_enumProvider.hasEnum Then
-                    RemoveUnusedEnums VarPtr(m_data.Keys(lastPos)), NULL_PTR
-                    m_enumProvider.pa.sa.pvData = VarPtr(m_data.Keys(i))
-                    m_enumProvider.pa.sa.rgsabound0.cElements = 3
-                    ptr = m_enumProvider.pa.ptrs(2)
-                End If
-                If hVal And HashMeta.hmObject Then
-                    Set m_data.Keys(i) = m_data.Keys(lastPos)
-                Else
-                    m_data.Keys(i) = m_data.Keys(lastPos)
-                End If
-                If m_enumProvider.hasEnum Then m_enumProvider.pa.ptrs(2) = ptr
-                m_data.Meta(i) = hVal
+        'Clear data and register removal
+        Vars.Items(i) = Empty
+        #If x64 Then
+            Vars.Keys(i) = Empty
+            Vars.Meta(i) = hmRemoved
+        #Else
+            Vars.Keys(i).Value = Empty
+            Vars.Keys(i).Meta = hmRemoved
+        #End If
+        If Vars.Enums.hasEnum Then 'Link previous to next
+            j = i + 1
+            #If x64 Then
+                Do While Vars.Meta(j) = hmRemoved: j = j + 1: Loop
             #Else
-                ptr = m_data.Keys(i).NextPtr
-                m_data.Keys(i) = m_data.Keys(lastPos)
-                m_data.Keys(i).NextPtr = ptr
-                If m_enumProvider.hasEnum Then
-                    RemoveUnusedEnums VarPtr(m_data.Keys(lastPos)), NULL_PTR
-                    m_data.Keys(lastPos - 1).NextPtr = NULL_PTR
-                End If
-                With m_data.Keys(i)
-                    If .IsItemObj Then
-                        Set m_data.Items(i) = m_data.Items(lastPos)
-                    Else
-                        m_data.Items(i) = m_data.Items(lastPos)
-                    End If
-                    hVal = .Meta
-                End With
+                Do While Vars.Keys(j).Meta = hmRemoved: j = j + 1: Loop
             #End If
-            '
-            'Update index inside hash map
-            groupSlot = hVal And m_hash.GroupMask
-            Do
-                With m_hash.Groups(groupSlot)
-                    For j = 0 To .Count - 1
-                        If .Index(j) = lastPos Then
-                            .Index(j) = i
-                            Exit Do
-                        End If
-                    Next j
-                End With
-                groupSlot = (groupSlot + 1) Mod m_hash.GroupCount
-            Loop
-        Else 'Clear data and register removal
-            m_data.Items(i) = Empty
-            #If Win64 Then
-                m_data.Keys(i) = Empty
-                m_data.Meta(i) = hmRemoved
-            #Else
-                m_data.Keys(i).Value = Empty
-                m_data.Keys(i).Meta = hmRemoved
-            #End If
-            If m_enumProvider.hasEnum Then 'Link previous to next
-                j = i + 1
-                #If Win64 Then
-                    Do While m_data.Meta(j) = hmRemoved: j = j + 1: Loop
+            ptr = VarPtr(Vars.Keys(j))
+            RemoveUnusedEnums VarPtr(Vars.Keys(i)), ptr
+            j = i - 1
+            Do While j >= 0
+                #If x64 Then
+                    If Vars.Meta(j) <> hmRemoved Then Exit Do
                 #Else
-                    Do While m_data.Keys(j).Meta = hmRemoved: j = j + 1: Loop
+                    If Vars.Keys(j).Meta <> hmRemoved Then Exit Do
                 #End If
-                ptr = VarPtr(m_data.Keys(j))
-                RemoveUnusedEnums VarPtr(m_data.Keys(i)), ptr
-                j = i - 1
-                Do While j >= 0
-                    #If Win64 Then
-                        If m_data.Meta(j) <> hmRemoved Then Exit Do
-                    #Else
-                        If m_data.Keys(j).Meta <> hmRemoved Then Exit Do
-                    #End If
-                    j = j - 1
-                Loop
-                If j >= 0 Then
-                    #If Win64 Then
-                        m_enumProvider.pa.sa.pvData = VarPtr(m_data.Keys(j + 1))
-                        m_enumProvider.pa.sa.rgsabound0.cElements = 3
-                        m_enumProvider.pa.ptrs(2) = ptr
-                    #Else
-                        m_data.Keys(j).NextPtr = ptr
-                    #End If
-                End If
+                j = j - 1
+            Loop
+            If j >= 0 Then
+                #If x64 Then
+                    With Mem.Common(0)
+                        .saP.pvData = VarPtr(Vars.Keys(j + 1)) + nextItemOffset
+                        Mem.RPtr(0) = ptr
+                        .saP.pvData = .dPtr
+                    End With
+                #Else
+                    Vars.Keys(j).NextPtr = ptr
+                #End If
             End If
-            Exit Sub
         End If
-    Else
-        If m_data.Count > m_data.UsedCount Then
-            i = lastPos - 1
-            #If Win64 Then
-                Do While m_data.Meta(i) = hmRemoved: i = i - 1: Loop
-            #Else
-                Do While m_data.Keys(i).Meta = hmRemoved: i = i - 1: Loop
-            #End If
-            m_data.Count = m_data.Count - lastPos + i + 1
-        End If
-        If m_enumProvider.hasEnum Then
-            RemoveUnusedEnums VarPtr(m_data.Keys(lastPos)), NULL_PTR
-            #If Win64 Then
-                m_data.Keys(i + 1) = Empty 'Just to clear the pointer
-            #Else
-                m_data.Keys(i).NextPtr = NULL_PTR
-            #End If
-        End If
+        Exit Sub
     End If
+    If Vars.Count > Vars.UsedCount Then
+        i = lastPos - 1
+        #If x64 Then
+            Do While Vars.Meta(i) = hmRemoved: i = i - 1: Loop
+        #Else
+            Do While Vars.Keys(i).Meta = hmRemoved: i = i - 1: Loop
+        #End If
+        Vars.Count = Vars.Count - lastPos + i + 1
+    End If
+    If Vars.Enums.hasEnum Then
+        RemoveUnusedEnums VarPtr(Vars.Keys(lastPos))
+        #If x64 Then
+            Vars.Keys(i + 1) = Empty 'Just to clear the pointer
+        #Else
+            Vars.Keys(i).NextPtr = 0&
+        #End If
+    End If
+    '
     'Clear Variants in case deallocation is needed e.g. String/Object
-    m_data.Items(lastPos) = Empty
-    #If Win64 Then
-        m_data.Keys(lastPos) = Empty
+    Vars.Items(lastPos) = Empty
+    #If x64 Then
+        Vars.Keys(lastPos) = Empty
     #Else
-        m_data.Keys(lastPos).Value = Empty
+        Vars.Keys(lastPos).Value = Empty
     #End If
-    m_data.Count = m_data.Count - 1
-    m_isUnordered = m_isUnordered And (m_data.UsedCount > 1)
+    Vars.Count = Vars.Count - 1
 End Sub
 
 Public Sub RemoveAll()
@@ -1092,28 +989,33 @@ End Function
 
 'Returns the current % load for the hash map containing indexes
 Public Property Get LoadFactor() As Single
-    If m_hash.GroupCount = 0 Then Exit Property
-    LoadFactor = m_data.UsedCount / (m_hash.GroupCount * GROUP_SIZE)
+    If Vars.Hash.GroupCount = 0 Then Exit Property
+    LoadFactor = Vars.UsedCount / (Vars.Hash.GroupCount * groupSize)
 End Property
 
-Private Sub InitLookups()
+Private Sub InitLookups(ByRef vlook As Lookups)
+    #If x64 Then
+        Const highBitOnly As LongLong = &H8080808080808080^
+    #Else
+        Const highBitOnly As Long = &H80808080
+    #End If
     Dim i As Long
     '
-    With m_lookups
+    With vlook
         .ByteShiftL(0) = 1
         .ByteMask(0) = &H7F
         .ByteOff(0) = Not .ByteMask(0)
-        For i = 1 To GROUP_SIZE - 1
+        For i = 1 To groupSize - 1
             .PositionMask(i - 1) = .ByteShiftL(i - 1) * &H80
             .ByteShiftL(i) = .ByteShiftL(i - 1) * &H100
             .CountMask(i) = .PositionMask(i - 1) + .CountMask(i - 1)
             .ByteMask(i) = .ByteMask(i - 1) * &H100
             .ByteOff(i) = Not .ByteMask(i)
         Next i
-        .CountMask(GROUP_SIZE) = HIGH_BIT_ONLY
+        .CountMask(groupSize) = highBitOnly
         '
-        'These are the relevant values if applying Modulo POSITION_PRIME
-    #If Win64 Then
+        'These are the relevant values if applying Modulo positionPrime
+    #If x64 Then
         .ModBytePosition(12) = 1
         .ModBytePosition(13) = 2
         .ModBytePosition(3) = 3
@@ -1131,34 +1033,6 @@ Private Sub InitLookups()
     End With
 End Sub
 
-'Initializes an Integer Array Accessor on Win and Mac
-'Initializes a Collection that can call ScriptingDictionary.HashVal with early
-'   binding speed (Win only)
-Private Sub InitLocalHasher()
-    Const INT_SIZE As Long = 2
-    InitSafeArray m_hasher.ia.sa, INT_SIZE
-#If Mac Then
-    CopyMemory ByVal VarPtr(m_hasher.ia), VarPtr(m_hasher.ia.sa), PTR_SIZE
-#Else
-    Dictionary.InitHasher m_hasher
-    CompareMode = m_compare
-#End If
-    With m_hasher
-        .dPtr = VarPtr(.d)
-        .ia.sa.pvData = .dPtr
-        .ia.sa.rgsabound0.cElements = INTS_IN_DOUBLE
-        .isSet = True
-        #If Win64 Then
-            InitSafeArray .la.sa, PTR_SIZE
-            .la.sa.pvData = m_hasher.dPtr
-            .la.sa.rgsabound0.cElements = 1
-            #If Mac Then
-                CopyMemory ByVal VarPtr(m_hasher.la) _
-                         , VarPtr(m_hasher.la.sa), PTR_SIZE
-            #End If
-        #End If
-    End With
-End Sub
 Private Sub InitSafeArray(ByRef sa As SAFEARRAY_1D, ByVal elemSize As Long)
     Const FADF_AUTO As Long = &H1
     Const FADF_FIXEDSIZE As Long = &H10
@@ -1171,148 +1045,138 @@ Private Sub InitSafeArray(ByRef sa As SAFEARRAY_1D, ByVal elemSize As Long)
     End With
 End Sub
 
-'To avoid API calls overhead in VBA7, a Pointer Accessor is cached in the
-'   default instance (Attribute VB_PredeclaredId = True) thus allowing faster
-'   memory manipulation
-'The best alternative was to use a standard .bas module like 'LibMemory' at:
-'   https://github.com/cristianbuse/VBA-MemoryTools
-#If Windows Then
-Friend Sub InitHasher(ByRef h As Hasher)
-    Const dictVTables As Long = 4
-    Const dictMainVTableSize As Long = 22
-    Const opNumDictHashVal As Long = 21
-    Const opNumCollItem As Long = 7
-    Static fakeDict As Collection
-    Static mainVTable(0 To dictMainVTableSize - 1) As LongPtr
-    Static sdl As ScrDictLayout
-    Static lcid As Long
-    Static saCL As SAFEARRAY_1D
-    Static saF As SAFEARRAY_1D
-    Static pa As PointerAccessor
-    Static fakePtr As LongPtr
-    Static isScrAvailable As Boolean
+'To avoid API calls overhead memory accessors are cached in the default instance
+'   (Attribute VB_PredeclaredId = True)
+'On Windows it initializes a Collection to call ScriptingDictionary.HashVal with
+'   early binding speed
+Friend Sub InitStructs(ByRef v As DictionaryVariables _
+                     , ByRef m As MemoryAccessors)
+    Static l As Lookups
+    Static h As Globals
+    Static saL As SAFEARRAY_1D
+    Static saH As SAFEARRAY_1D
+    Static isSet As Boolean
+    Static saPtrs(0 To 4) As LongPtr
     '
     If Not Me Is Dictionary Then Exit Sub
-    If Not pa.isSet Then
-        InitPointerAccessor pa
+    Set v.DefInstance = Me 'Avoid deallocation of this instance
+    '
+    If Not isSet Then
+        saPtrs(0) = VarPtr(saH)
+        saPtrs(1) = VarPtr(saL)
+        saPtrs(2) = VarPtr(h.saI)
+        saPtrs(3) = VarPtr(h.saP)
         '
-        'Early bind a Collection interface to a fake Scripting.Dictionary
-        '   where Collection.Item is mapped to Dictionary.HashVal. This allows
-        '   calls to HashVal with early binding speed without a dll reference!
+        InitLookups l
+        InitSafeArray saH, LenB(h)
+        InitSafeArray saL, LenB(l)
+        InitSafeArray h.saI, intSize
+        InitSafeArray h.saP, ptrSize
         '
+        saH.pvData = VarPtr(h)
+        saL.pvData = VarPtr(l)
+        h.dPtr = VarPtr(h.d)
+        h.saI.pvData = h.dPtr
+        h.saP.pvData = h.dPtr
+        '
+        saH.rgsabound0.cElements = 1
+        saL.rgsabound0.cElements = 1
+        h.saI.rgsabound0.cElements = intsPerDouble
+        h.saP.rgsabound0.cElements = 1
+        '
+        'The only API call on Windows
+        CopyMemory ByVal VarPtr(Mem) + ptrSize * 3, saPtrs(3), ptrSize
+#If Windows Then
+        Const dictVTables As Long = 4
+        Const dictMainVTableSize As Long = 22
+        Const opNumDictHashVal As Long = 21
+        Const opNumCollItem As Long = 7
+        Static mainVTable(0 To dictMainVTableSize - 1) As LongPtr
+        Static c As Collection
+        Static saC As SAFEARRAY_1D
         Dim temp As Object
         Dim i As Long
         '
-        fakePtr = VarPtr(fakeDict)
+        'Early bind a Collection interface to a fake Scripting.Dictionary
+        '   where Collection.Item is mapped to Dictionary.HashVal. This allows
+        '   calls to HashVal with early binding speed without a dll reference
+        '
+        InitSafeArray saC, PTR_SIZE
+        saC.pvData = VarPtr(c)
+        saC.rgsabound0.cElements = 1
+        saPtrs(4) = VarPtr(saC)
         '
         On Error Resume Next 'In case scrun.dll not available
         Set temp = CreateObject("Scripting.Dictionary")
         On Error GoTo 0
         '
-        isScrAvailable = Not (temp Is Nothing)
-        If isScrAvailable Then
+        h.isScrAvailable = Not (temp Is Nothing)
+        If h.isScrAvailable Then
             'Copy Scripting.Dictionary virtual table addresses
-            pa.sa.pvData = ObjPtr(temp)
-            pa.sa.rgsabound0.cElements = dictMainVTableSize
+            h.saP.pvData = ObjPtr(temp)
+            h.saP.rgsabound0.cElements = dictMainVTableSize
             For i = 0 To dictVTables - 1
-                sdl.vTables(i) = pa.ptrs(i)
+                h.sdl.vTables(i) = Mem.RPtr(i)
             Next i
             '
             'Copy locale ID
-            #If Win64 Then
-                lcid = CLng(pa.ptrs(10))
+            #If x64 Then
+                h.lcid = CLng(Mem.RPtr(10))
             #Else
-                lcid = pa.ptrs(12)
+                h.lcid = Mem.RPtr(12)
             #End If
             Set temp = Nothing 'Actual dictionary not needed anymore
-            sdl.localeID = lcid
+            h.sdl.lcid = h.lcid
             '
             'Copy entire main virtual function table to our own
-            pa.sa.pvData = sdl.vTables(0)
+            h.saP.pvData = h.sdl.vTables(0)
             For i = 0 To dictMainVTableSize - 1
-                mainVTable(i) = pa.ptrs(i)
+                mainVTable(i) = Mem.RPtr(i)
             Next i
-            sdl.vTables(0) = VarPtr(mainVTable(0)) 'Replace main vTable
+            h.sdl.vTables(0) = VarPtr(mainVTable(0)) 'Replace main vTable
             '
             'Map Collection.Item to Dictionary.HashVal
             mainVTable(opNumCollItem) = mainVTable(opNumDictHashVal)
             '
             'Set up fake instance
-            sdl.hashModulo = HashMeta.[_modHM]
-            sdl.refCount = 2 'To avoid deallocation
-            pa.sa.rgsabound0.cElements = 1
-            pa.sa.pvData = fakePtr
-            pa.ptrs(0) = VarPtr(sdl)
-            '
-            'Init safe array for comp/lcid
-            Const LONG_SIZE As Long = 4
-            InitSafeArray saCL, LONG_SIZE
-            saCL.pvData = VarPtr(sdl.compMode)
-            saCL.rgsabound0.cElements = 2
-            '
-            'Init safe array for collection
-            InitSafeArray saF, PTR_SIZE
-            saF.pvData = fakePtr
-            saF.rgsabound0.cElements = 1
-        Else
-            pa.sa.pvData = fakePtr
-            pa.sa.rgsabound0.cElements = 1
+            h.sdl.hashModulo = HashMeta.[_modHM]
+            h.sdl.refCount = 2 'To avoid deallocation
+            h.saP.rgsabound0.cElements = 1
+            h.saP.pvData = VarPtr(c)
+            Mem.RPtr(0) = VarPtr(h.sdl)
         End If
         '
         'Increase stack frame size for 'NewEnum' to avoid For Each.. x64 bug
-        #If Win64 Then
-            pa.sa.pvData = ObjPtr(Me) 'vtbl
-            pa.sa.rgsabound0.cElements = 1
+        #If x64 Then
+            h.saP.pvData = ObjPtr(Me) 'vtbl
+            h.saP.pvData = Mem.RPtr(0) + ptrSize * 7 'NewEnum address
+            h.saP.pvData = Mem.RPtr(0) + 21 'SUB R12, 0x10
             '
-            pa.sa.pvData = pa.ptrs(0) + PTR_SIZE * 7 'NewEnum address
-            pa.sa.pvData = pa.ptrs(0) + 21 'SUB R12, 0x10
-            '
-            If (pa.ptrs(0) And &HFFFF^) = &H8149^ Then
+            If (Mem.RPtr(0) And &HFFFF^) = &H8149^ Then
                 'SUB found. Replace 0x10 (16) with 0x800 (2048) bytes
-                pa.ptrs(0) = pa.ptrs(0) And &HFF00000000FFFFFF^ Or &H800000000^
+                Mem.RPtr(0) = Mem.RPtr(0) And &HFF00000000FFFFFF^ Or &H800000000^
             End If
-            pa.sa.pvData = fakePtr
         #End If
-    End If
-    If isScrAvailable Then
-        h.lcid = lcid
-        h.isScrAvailable = True
-        Set h.defInstance = Me 'Avoid deallocation of this instance
-        pa.sa.pvData = VarPtr(h)
-        pa.ptrs(0) = VarPtr(saF)
-        '
-        'Init compMode and lcid accesor
-        pa.sa.pvData = pa.sa.pvData + PTR_SIZE
-        pa.ptrs(0) = VarPtr(saCL)
-    End If
-    '
-    'Init integer accesor
-    pa.sa.pvData = VarPtr(h.ia)
-    pa.ptrs(0) = VarPtr(h.ia.sa)
-    #If Win64 Then
-        pa.sa.pvData = VarPtr(h.la)
-        pa.ptrs(0) = VarPtr(h.la.sa)
-    #End If
-    '
-    pa.sa.pvData = fakePtr
-End Sub
 #End If
-
-Friend Sub InitPointerAccessor(ByRef paToInit As PointerAccessor)
-    Static pa As PointerAccessor
-    '
-    If Not pa.isSet Then
-        InitSafeArray pa.sa, PTR_SIZE
-        CopyMemory ByVal VarPtr(pa), VarPtr(pa.sa), PTR_SIZE 'The only API call
-        pa.sa.pvData = VarPtr(pa.sa) 'Some valid address
-        pa.sa.rgsabound0.cElements = 1
-        pa.isSet = True
+        isSet = True
     End If
     '
-    InitSafeArray paToInit.sa, PTR_SIZE
-    pa.sa.pvData = VarPtr(paToInit)
-    pa.ptrs(0) = VarPtr(paToInit.sa)
-    paToInit.isSet = True
+#If Mac Then
+    CopyMemory ByVal VarPtr(m), saPtrs(0), ptrSize * 4
+#Else
+    If h.isScrAvailable Then
+        If v.Compare <= vbTextCompare Then v.LocaleID = h.lcid
+    End If
+    '
+    h.saP.rgsabound0.cElements = 5
+    h.saP.pvData = VarPtr(m)
+    For i = 0 To 4
+        Mem.RPtr(i) = saPtrs(i)
+    Next i
+    h.saP.rgsabound0.cElements = 1
+    h.saP.pvData = h.dPtr
+#End If
+    v.IsInitialized = True
 End Sub
     
 Public Function Factory() As Dictionary
@@ -1326,143 +1190,146 @@ End Property
 Private Function DictEnum() As IUnknown
     Dim hadEnum As Boolean
     '
-    With m_enumProvider
+    If Not Vars.IsInitialized Then Init 'Need Accessor
+    With Vars.Enums
         hadEnum = .hasEnum
         If .hasEnum Then RemoveUnusedEnums
         Set DictEnum = .emptyColl.[_NewEnum]
         .hasEnum = True
         .enumsColl.Add DictEnum, CStr(ObjPtr(DictEnum))
-        If Not .pa.isSet Then Dictionary.InitPointerAccessor .pa
     End With
-    If m_data.UsedCount = 0 Then Exit Function
+    If Vars.UsedCount = 0 Then Exit Function
     '
     Dim i As Long
-    Dim hasGaps As Boolean: hasGaps = (m_data.UsedCount < m_data.Count)
+    Dim hasGaps As Boolean: hasGaps = (Vars.UsedCount < Vars.Count)
     '
     If hasGaps Then
-        #If Win64 Then
-            Do While m_data.Meta(i) = hmRemoved: i = i + 1: Loop
+        #If x64 Then
+            Do While Vars.Meta(i) = hmRemoved: i = i + 1: Loop
         #Else
-            Do While m_data.Keys(i).Meta = hmRemoved: i = i + 1: Loop
+            Do While Vars.Keys(i).Meta = hmRemoved: i = i + 1: Loop
         #End If
     End If
-    With m_enumProvider.pa
-        .sa.pvData = ObjPtr(DictEnum) + NEXT_ITEM_OFFSET
-        .sa.rgsabound0.cElements = 1
-        .ptrs(0) = VarPtr(m_data.Keys(i))
+    With Mem.Common(0)
+        .saP.pvData = ObjPtr(DictEnum) + nextItemOffset
+        Mem.RPtr(0) = VarPtr(Vars.Keys(i))
+        .saP.pvData = .dPtr
     End With
     If hadEnum Then Exit Function
     '
-    Dim ptr As LongPtr: ptr = VarPtr(m_data.Keys(0))
+    Dim ptr As LongPtr: ptr = VarPtr(Vars.Keys(0))
     Dim j As Long
     '
-#If Win64 Then
-    With m_enumProvider.pa
-        .sa.pvData = ptr
-        .sa.rgsabound0.cElements = (m_data.Count + 1) * 3
+#If x64 Then
+    Const variantSize As Long = 24
+    With Mem.Common(0)
+        .saP.pvData = ptr
+        .saP.rgsabound0.cElements = (Vars.Count + 1) * 3
         If hasGaps Then
             j = i * 3 + 5
-            For i = i + 1 To m_data.Count - 1
-                If m_data.Meta(i) <> hmRemoved Then
-                    .ptrs(j) = ptr + VARIANT_SIZE * i
+            For i = i + 1 To Vars.Count - 1
+                If Vars.Meta(i) <> hmRemoved Then
+                    Mem.RPtr(j) = ptr + variantSize * i
                     j = i * 3 + 5
                 End If
             Next i
-            .ptrs(j) = NULL_PTR
+            Mem.RPtr(j) = 0^
         Else
-            For i = 5 To .sa.rgsabound0.cElements - 4 Step 3
-                ptr = ptr + VARIANT_SIZE
-                .ptrs(i) = ptr
+            For i = 5 To .saP.rgsabound0.cElements - 4 Step 3
+                ptr = ptr + variantSize
+                Mem.RPtr(i) = ptr
             Next i
-            .ptrs(i) = NULL_PTR
+            Mem.RPtr(i) = 0^
         End If
+        .saP.rgsabound0.cElements = 1
+        .saP.pvData = .dPtr
     End With
 #Else
+    Const enumVarSize As Long = 28
     If hasGaps Then
         j = i
-        For i = i + 1 To m_data.Count - 1
-            If m_data.Keys(i).Meta <> hmRemoved Then
-                m_data.Keys(j).NextPtr = ptr + ENUM_VAR_SIZE * i
+        For i = i + 1 To Vars.Count - 1
+            If Vars.Keys(i).Meta <> hmRemoved Then
+                Vars.Keys(j).NextPtr = ptr + enumVarSize * i
                 j = i
             End If
         Next i
-        m_data.Keys(j).NextPtr = NULL_PTR
+        Vars.Keys(j).NextPtr = 0&
     Else
-        ptr = ptr + ENUM_VAR_SIZE
-        For i = 0 To m_data.Count - 2
-            m_data.Keys(i).NextPtr = ptr + ENUM_VAR_SIZE * i
+        ptr = ptr + enumVarSize
+        For i = 0 To Vars.Count - 2
+            Vars.Keys(i).NextPtr = ptr + enumVarSize * i
         Next i
-        m_data.Keys(i).NextPtr = NULL_PTR
+        Vars.Keys(i).NextPtr = 0&
     End If
 #End If
-    m_enumProvider.pa.sa.rgsabound0.cElements = 0
-    m_enumProvider.pa.sa.pvData = NULL_PTR
 End Function
 
 Private Sub RemoveUnusedEnums(Optional ByVal searchPtr As LongPtr _
                             , Optional ByVal replacePtr As LongPtr)
+    #If x64 Then
+        Const nullPtr As LongLong = 0^
+    #Else
+        Const nullPtr As Long = 0&
+    #End If
     Dim e As Variant 'IEnumVARIANT does not work with For Each
-    With m_enumProvider
-        For Each e In .enumsColl
+    With Mem.Common(0)
+        For Each e In Vars.Enums.enumsColl
             Dim ptr As LongPtr: ptr = ObjPtr(e)
-            .pa.sa.pvData = ptr + NEXT_ITEM_OFFSET
-            .pa.sa.rgsabound0.cElements = 1
-            If .pa.ptrs(0) = NULL_PTR Then
-                .enumsColl.Remove CStr(ptr)
-            ElseIf .pa.ptrs(0) = searchPtr Then
-                If replacePtr = NULL_PTR Then
-                    .enumsColl.Remove CStr(ptr)
+            .saP.pvData = ptr + nextItemOffset
+            .saP.rgsabound0.cElements = 1
+            If Mem.RPtr(0) = nullPtr Then
+                Vars.Enums.enumsColl.Remove CStr(ptr)
+            ElseIf Mem.RPtr(0) = searchPtr Then
+                If replacePtr = nullPtr Then
+                    Vars.Enums.enumsColl.Remove CStr(ptr)
                 Else
-                    .pa.ptrs(0) = replacePtr
+                    Mem.RPtr(0) = replacePtr
                 End If
             End If
         Next e
-        .hasEnum = (.enumsColl.Count > 0)
-        .pa.sa.rgsabound0.cElements = 0
-        .pa.sa.pvData = NULL_PTR
+        Vars.Enums.hasEnum = (Vars.Enums.enumsColl.Count > 0)
+        .saP.pvData = .dPtr
     End With
 End Sub
 
 Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
     Dim e As Variant 'IEnumVARIANT does not work with For Each
-    With m_enumProvider
-        For Each e In .enumsColl
-            .pa.sa.pvData = ObjPtr(e) + NEXT_ITEM_OFFSET
-            .pa.sa.rgsabound0.cElements = 1
-            .pa.ptrs(0) = .pa.ptrs(0) + addrShift
-        Next e
-    End With
+    For Each e In Vars.Enums.enumsColl
+        Mem.Common(0).saP.pvData = ObjPtr(e) + nextItemOffset
+        Mem.Common(0).saP.rgsabound0.cElements = 1
+        Mem.RPtr(0) = Mem.RPtr(0) + addrShift
+    Next e
     '
-    Dim hasGaps As Boolean: hasGaps = (m_data.UsedCount < m_data.Count)
+    Dim hasGaps As Boolean: hasGaps = (Vars.UsedCount < Vars.Count)
     Dim i As Long
     '
-#If Win64 Then
-    With m_enumProvider.pa
-        .sa.pvData = VarPtr(m_data.Keys(0))
-        .sa.rgsabound0.cElements = m_data.Count * 3
+#If x64 Then
+    With Mem.Common(0)
+        .saP.pvData = VarPtr(Vars.Keys(0))
+        .saP.rgsabound0.cElements = Vars.Count * 3
         If hasGaps Then
-            For i = 5 To .sa.rgsabound0.cElements - 1 Step 3
-                If .ptrs(i) <> NULL_PTR Then .ptrs(i) = .ptrs(i) + addrShift
+            For i = 5 To .saP.rgsabound0.cElements - 1 Step 3
+                If Mem.RPtr(i) <> 0^ Then Mem.RPtr(i) = Mem.RPtr(i) + addrShift
             Next i
         Else
-            For i = 5 To .sa.rgsabound0.cElements - 1 Step 3
-                .ptrs(i) = .ptrs(i) + addrShift
+            For i = 5 To .saP.rgsabound0.cElements - 1 Step 3
+                Mem.RPtr(i) = Mem.RPtr(i) + addrShift
             Next i
         End If
+        .saP.pvData = .dPtr
     End With
 #Else
     If hasGaps Then
-        For i = 0 To m_data.Count - 2
-            With m_data.Keys(i)
-                If .NextPtr <> NULL_PTR Then .NextPtr = .NextPtr + addrShift
+        For i = 0 To Vars.Count - 2
+            With Vars.Keys(i)
+                If .NextPtr <> 0& Then .NextPtr = .NextPtr + addrShift
             End With
         Next i
     Else
-        For i = 0 To m_data.Count - 2
-            m_data.Keys(i).NextPtr = m_data.Keys(i).NextPtr + addrShift
+        For i = 0 To Vars.Count - 2
+            Vars.Keys(i).NextPtr = Vars.Keys(i).NextPtr + addrShift
         Next i
     End If
 #End If
-    m_enumProvider.pa.sa.rgsabound0.cElements = 0
-    m_enumProvider.pa.sa.pvData = NULL_PTR
 End Sub

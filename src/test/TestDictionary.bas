@@ -21,7 +21,6 @@ Public Sub RunAllDictionaryTests()
     TestDictionaryCount
     TestDictionaryExists
     TestDictionaryFactory
-    TestDictionaryOrder
     TestDictionaryHashVal
     TestDictionaryItem
     TestDictionaryItems
@@ -42,7 +41,6 @@ Private Sub TestEmptyDictionary()
     Debug.Assert d.CompareMode = vbBinaryCompare
     Debug.Assert Not d.Factory Is d
     Debug.Assert TypeOf d.Factory Is Dictionary
-    Debug.Assert d.IsOrdered
     Debug.Assert d.LoadFactor = 0
     Debug.Assert d.Self Is d
 End Sub
@@ -231,65 +229,6 @@ Private Sub TestDictionaryFactory()
     Debug.Assert TypeOf Dictionary.Factory Is Dictionary
 End Sub
 
-Private Sub TestDictionaryOrder()
-    Dim d As New Dictionary
-    Dim i As Long
-    '
-    Debug.Assert d.FastUnorderedRemove = False
-    Debug.Assert d.IsOrdered = True
-    For i = 1 To 5
-        d.Add i, i
-    Next i
-    Debug.Assert d.IsOrdered = True
-    '
-    d.Remove 3
-    Debug.Assert d.IsOrdered = True
-    Debug.Assert ArrayToCSV(d.Items) = "[1,2,4,5]"
-    '
-    On Error Resume Next
-    d.FastUnorderedRemove = True
-    Debug.Assert Err.Number = invalidCallErr
-    On Error GoTo 0
-    '
-    d.RemoveAll
-    d.FastUnorderedRemove = True
-    Debug.Assert d.IsOrdered = True
-    Debug.Assert d.FastUnorderedRemove = True
-    For i = 1 To 5
-        d.Add i, i
-    Next i
-    Debug.Assert d.IsOrdered = True
-    '
-    d.Remove 3
-    Debug.Assert d.IsOrdered = False
-    Debug.Assert ArrayToCSV(d.Items) = "[1,2,5,4]"
-    '
-    d.Remove 2
-    Debug.Assert d.IsOrdered = False
-    Debug.Assert ArrayToCSV(d.Items) = "[1,4,5]"
-    '
-    d.Remove 1
-    Debug.Assert d.IsOrdered = False
-    Debug.Assert ArrayToCSV(d.Items) = "[5,4]"
-    '
-    On Error Resume Next
-    d.FastUnorderedRemove = True
-    Debug.Assert Err.Number = 0
-    d.FastUnorderedRemove = False
-    Debug.Assert Err.Number = invalidCallErr
-    On Error GoTo 0
-    '
-    d.Remove 4
-    Debug.Assert d.IsOrdered = True 'Only one elem left
-    Debug.Assert ArrayToCSV(d.Items) = "[5]"
-    '
-    d.Remove 5
-    Debug.Assert d.IsOrdered = True
-    On Error Resume Next
-    d.FastUnorderedRemove = False
-    Debug.Assert Err.Number = 0
-    On Error GoTo 0
-End Sub
 Private Function ArrayToCSV(arr As Variant _
     , Optional ByVal delimiter As String = "," _
 ) As String
@@ -689,14 +628,13 @@ Private Sub TestDictionaryNewEnum()
     Debug.Assert i = UBound(arr) + 1
     '
     d.RemoveAll
-    d.FastUnorderedRemove = True
     '
     For i = 1 To 7
         d.Add i, i
     Next i
     '
     d.Remove 4
-    arr = Array(1, 2, 3, 7, 5, 6)
+    arr = Array(1, 2, 3, 5, 6, 7)
     '
     i = 0
     For Each v In d
@@ -717,7 +655,7 @@ Private Sub TestDictionaryNewEnum()
     Debug.Assert i = UBound(arr) + 1
     '
     d.Remove 1
-    arr = Array(7, 2, 3)
+    arr = Array(2, 3, 7)
     '
     i = 0
     For Each v In d
@@ -778,7 +716,6 @@ Private Sub TestDictionaryRemove()
      Debug.Assert d.Count = 5
     '
     d.RemoveAll
-    d.FastUnorderedRemove = True
     '
     For i = 1 To 5
         d.Add CVErr(i), i
@@ -808,8 +745,8 @@ Private Sub TestDictionaryRemove()
     On Error GoTo 0
     '
     d.Remove CVErr(3)
-    Debug.Assert ArrayToCSV(d.Items) = "[1,2,Null,4,5]"
-    Debug.Assert ArrayToCSV(d.Keys) = "[Error 1,Error 2,Empty,Error 4,Error 5]"
+    Debug.Assert ArrayToCSV(d.Items) = "[1,2,4,5,Null]"
+    Debug.Assert ArrayToCSV(d.Keys) = "[Error 1,Error 2,Error 4,Error 5,Empty]"
     Debug.Assert d.Count = 5
     '
     d.Key(Empty) = CVErr(3)
