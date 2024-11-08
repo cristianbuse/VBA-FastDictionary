@@ -110,7 +110,7 @@ However, the new Dictionary (this repo) casts ```Single``` to ```Double```. This
 
 This Dictionary only raises errors 5, 9, 450 and 457. For example Scripting.Dictionary raises error 32811 if calling ```Remove``` with a key that does not exist while this Dictionary raises error 9 (Subscript out of Range).
 
-The main reason not to adhere to the same error numbers is speed. For example in the [```Item```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L666-L667) method, instead of using an extra ```If``` statement to check if the call to ```GetIndex``` returns ```NOT_FOUND```, the code simply continues and if the key was indeed missing, error 9 is raised anyway when trying to access the storage array with an invalid index. Other methods like ```Remove``` will simply return error 9 for consistency. The omission of the extra ```If``` statement does not impact speed for a few items but for millions of items there is a difference and speed was chosen over consistency here.
+The main reason not to adhere to the same error numbers is speed. For example in the [```Item```](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L681-L682) method, instead of using an extra ```If``` statement to check if the call to ```GetIndex``` returns ```NOT_FOUND```, the code simply continues and if the key was indeed missing, error 9 is raised anyway when trying to access the storage array with an invalid index. Other methods like ```Remove``` will simply return error 9 for consistency. The omission of the extra ```If``` statement does not impact speed for a few items but for millions of items there is a difference and speed was chosen over consistency here.
 
 ### Item (Get) incompatibility
 
@@ -186,7 +186,7 @@ To achieve good hash distribution the following strategies were implemented:
 
 As mentioned above, numbers are first cast to ```Double```. See [Hashing Numbers incompatibility](#hashing-numbers-incompatibility) for details as to why this was chosen.
 
-While initially a single prime number (13) was used to hash all numbers, this was changed in [7d58829](https://github.com/cristianbuse/VBA-FastDictionary/commit/7d58829410082f7899a6933495398868d2c56eab) to 4 prime numbers. The new approach cut the time in half for hashing large integer numbers and also brought small improvements for hashing smaller integers. Both strategies yield the same results for fractional numbers. The numbers are hashed as per [these lines](https://github.com/cristianbuse/VBA-FastDictionary/blob/7d58829410082f7899a6933495398868d2c56eab/src/Dictionary.cls#L528-L541).
+While initially a single prime number (13) was used to hash all numbers, this was changed in [7d58829](https://github.com/cristianbuse/VBA-FastDictionary/commit/7d58829410082f7899a6933495398868d2c56eab) to 4 prime numbers. The new approach cut the time in half for hashing large integer numbers and also brought small improvements for hashing smaller integers. Both strategies yield the same results for fractional numbers. The numbers are hashed as per [these lines](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L528-L560).
 
 Quick example:
 ```VBA
@@ -224,13 +224,13 @@ Objects pointers are well distributed anyway because:
 - each class instance takes a certain amount of space and so even if adjacent in memory the pointers for 2 instances still have some bytes in between (not consecutive numbers)
 - class instances are stored in memory depending on where the memory allocator finds space
 
-So, there is no need to split the pointer into smaller integers to hash. Instead, a modulo prime number is used for best hash distribution. The prime value of 2701 was chosen after running speed tests for all the prime numbers up to 10k. The code is basically [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/7d58829410082f7899a6933495398868d2c56eab/src/Dictionary.cls#L516-L525).
+So, there is no need to split the pointer into smaller integers to hash. Instead, a modulo prime number is used for best hash distribution. The prime value of 2701 was chosen after running speed tests for all the prime numbers up to 10k. The code is basically [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L508-L525).
 
 This strategy seems to yield the best results as seen [here](benchmarking/result_screenshots/add_object_(class1)_win_vba7_x64.png) or [here](benchmarking/result_screenshots/add_object_(collection)_win_vba7_x64.png).
 
 ### Text Hashing on Mac
 
-On Mac, all texts are hashed by iterating each wide character (Integer) in a loop. Each char code is added to the previous hash value and the result is multiplied with a prime number. This is repeated until all characters are iterated. A bitmask is used to avoid overflow. The code is [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L492-L508). The prime number value of 131 was carefully chosen after many speed tests with different prime values.
+On Mac, all texts are hashed by iterating each wide character (Integer) in a loop. Each char code is added to the previous hash value and the result is multiplied with a prime number. This is repeated until all characters are iterated. A bitmask is used to avoid overflow. The code is [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L491-L503). The prime number value of 131 was carefully chosen after many speed tests with different prime values.
 
 For text compare, the key is first passed to the ```VBA.LCase``` function and then the result is hashed.
 ```LCase``` is fast enough on Mac that there is no need to build a [cached map for each character code](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/benchmarking/third-party_code/cHashD/modHashD.bas#L42-L52) like ```cHashD``` does.
@@ -495,7 +495,7 @@ Each instance of this Dictionary uses a fake array of ```Collection``` type (one
 
 As briefly mentioned in the [Hashing](#hashing) section, all hash values are combined with data type metadata in the upper bits of the hash with the goal of minimizing comparisons and ultimately being more efficient.
 
-The hash + meta layout is briefly shown in the text at [the top of the GetIndex method](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L454-L467). Here is another representation:
+The hash + meta layout is briefly shown in the text at [the top of the GetIndex method](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L432-L447). Here is another representation:
 ![image](https://github.com/cristianbuse/VBA-FastDictionary/assets/23198997/abd41e6e-7c69-4b5c-853e-562ced91b086)
 
 With this chosen layout, hash values of up to 268,435,456 (0x10000000) can be stored (28 bits), while the next upper 3 bits store metadata about the type. All number data types are combined into a single type for compatibility with Scripting.Dictionary. Similarly, ```vbDataObject``` is combined with ```vbObject``` as per below:
@@ -526,7 +526,7 @@ For example, if a number key and a text key happen to have the same hash value o
 
 When searching the hash table for a key that was just hashed, we first compare the hash + meta values and only if they are equal, we then compare the actual values. This avoids unnecessary comparisons which are especially slow for texts. In fact, before we even compare the hash + meta values, we first compare a sub-hash called "control byte" but that is described in more detail in the [Hash Map/Table](#hash-maptable) section below.
 
-The meta values are defined in the [HashMeta](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L209-L217) enum. There is also a special value ```hmRemove``` used to mark items/keys that have been removed.
+The meta values are defined in the [HashMeta](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L129-L137) enum. There is also a special value ```hmRemove``` used to mark items/keys that have been removed.
 
 Please note that for special float values like +Inf (positive infinity), -Inf (negative infinity), QNaN (quiet NaN) and SNaN (signaling NaN), the meta bits are all set to 0 (zero). This is to avoid comparison against these special values - the hash comparison will be enough in the same way it is for ```Empty``` and ```Null```.
 
@@ -534,7 +534,7 @@ Please note that for special float values like +Inf (positive infinity), -Inf (n
 
 After watching the [Designing a Fast, Efficient, Cache-friendly Hash Table, Step by Step](https://www.youtube.com/watch?v=ncHmEUmJZf4) video on YouTube, presented by Matt Kulukundis, the idea of using SSE instructions to compare multiple sub-hashes in a set of just 3 instructions sounded great. Since we cannot natively use SSE instructions in VBA, this Dictionary uses the next best thing - bitwise operations.
 
-The structure looks like [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L171-L184). In short:
+The structure looks like [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L139-L152). In short:
 - the hash map/table is divided into groups (buckets) of fixed size
 - each group can hold 4 (x32) or 8 (x64) elements of ```Long``` data type - which will store indexes into the keys/meta storage. This is an array fixed in size at compile time
 - each group has an integer "Control" value which is either ```Long``` (x32) or ```LongLong``` (x64) to allow for bitwise operations. Each byte in the control corresponds to one element/index in the group's array. To avoid overflow problems, only the lower 7 bits in each byte are used. Each 7 bits in a control byte are in fact sub-hash values corresponding to the hash of each key pointed by the indexes in the group's array.
@@ -544,7 +544,7 @@ The following diagram illustrates the above:
 
 ### Sub-hashing
 
-When a key is hashed, the following sub-hashes are computed, in the [GetIndex](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L548-L604) method:
+When a key is hashed, the following sub-hashes are computed, in the [GetIndex](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L566-L636) method:
 - lower bits in the hash value are used to identify the group slot. The number of bits used depends on the number of groups (table size). A modulo operator is applied to compute this sub-hash. These are the 'pink' bits in the above diagram
 - the next 7 bits in the hash value are the control byte. To compute this sub-hash, a bit mask and a right-shift is applied. These are the 'red' bits in the above diagram
 
@@ -553,7 +553,7 @@ When a key is hashed, the following sub-hashes are computed, in the [GetIndex](h
 If a key needs to be found, then the steps are the following:
 - the full hash+meta is computed and then the 2 sub-hashes
 - the group slot sub-hash indicates the group/bucket to search in
-- within the group, the control sub-hash byte is checked against the group's control integer using [these](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L556-L561) bitwise operations. This will find all matching positions within the group
+- within the group, the control sub-hash byte is checked against the group's control integer using [these](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L588-L593) bitwise operations. This will find all matching positions within the group
 - for each matching position, the full hash+meta value is compared
 - if the full hashes match, then the actual keys are compared
 - the search will continue until a match is found or until a group that was never full is encountered. Please note that during this process the group sub-hash is being incremented
@@ -571,13 +571,13 @@ When adding the Key-Item (and hash+meta) pair to the data storage, in the group 
 - the index for the data is added in the first available position within the group
 - the corresponding byte in the control integer is updated with the value of the control sub-hash so that it can be used later for fast find
 
-Code [here](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L371-L376).
+Code [here](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L347-L352).
 
 When adding a new key, the new corresponding index is added to the hash table, so there is a chance that the group sub-hash indicates a full group. As mentioned above, this is taken care of in the finding process (by incrementing the group slot value), and we always end up adding the new index into a bucket that has available space. Since hashes are not going to have perfect distribution, a new index can be added a few groups/buckets away from the intended position. This is why we track if the group was ever full via a boolean flag. The search for a key will always be done until the first group that was never empty is found. The nice benefit is that we can achieve a higher load factor without needing to resize individual groups/buckets. The current max load is set to 50% which seems to provide a good balance between storage and performance.
 
 ## Rehashing
 
-As briefly mentioned in the [Hashing](#hashing) section, there is no rehashing in the real sense of the word. Instead, all hash values are stored along with the key. Still, the method called when the hash table needs to grow is named [```Rehash```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L415-L443) because most people are familiar with the concept.
+As briefly mentioned in the [Hashing](#hashing) section, there is no rehashing in the real sense of the word. Instead, all hash values are stored along with the key. Still, the method called when the hash table needs to grow is named [```Rehash```](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L394-L421) because most people are familiar with the concept.
 
 By avoiding rehashing the actual keys, this Dictionary can adapt efficiently the hash table size to any number of key-item pairs.
 
@@ -644,9 +644,9 @@ We can see on the right side of the diagram that:
 
 In total, we are using all Bytes. Moreover, we don't need a custom structure - we can just continue using an array of ```Variant``` type.
 
-The code that updates the Next Pointers looks like [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L1248-L1267)
+The code that updates the Next Pointers looks like [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L1224-L1246)
 
-There is an additional benefit - we can still return the keys array via the ```Keys``` method, without having to iterate the keys, if there are no gaps in the array. See [code](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L825-L827).
+There is an additional benefit - we can still return the keys array via the ```Keys``` method, without having to iterate the keys, if there are no gaps in the array. See [code](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L841-L843).
 
 ### x32 implementation
 
@@ -659,9 +659,9 @@ So, we must use the following custom structure:
 However, we can make use of the space between the Variant and the Next Pointer (Extra information):
 ![image](https://github.com/cristianbuse/VBA-FastDictionary/assets/23198997/e20e1594-b994-4dbb-b752-9dc84f25e130)
 
-[Here](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L186-L207) is how the custom type looks like, and [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L1269-L1284) is the code that updates the Next Pointers.
+[Here](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L154-L162) is how the custom Variant looks like on x32 and [here](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L246-L255) is the main data storage structure for keys and items, and [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L1248-L1264) is the code that updates the Next Pointers.
 
-Although, the ```Keys``` method [has to iterate the keys](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L843-L852) in order to return the keys array, this is not a big drawback because:
+Although, the ```Keys``` method [has to iterate the keys](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L859-L868) in order to return the keys array, this is not a big drawback because:
 - ```Items``` method is not affected
 - ```For Each``` can be used on the Dictionary instance directly (```For Each v In dict```) which is anyway faster than iterating the keys array (```For Each v In dict.Keys```)
 
@@ -675,10 +675,10 @@ Compared to not implementing this functionality, there are only 8 extra Bytes be
 
 When using the class iterator described above, there are a few scenarios that we need to consider:
 - a ```For Each``` loop can be called inside an existing ```For Each``` loop
-- items/keys can be added/removed while inside of a ```For Each``` loop. This can lead to a [re-allocation of the data](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L341-L358)
+- items/keys can be added/removed while inside of a ```For Each``` loop. This can lead to a [re-allocation of the data](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L311-L328)
 - ```NewEnum``` can be called and stored to be used at a later stage
 
-To account for all the scenarios above, this Dictionary has additional management in the [```RemoveUnusedEnums```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L1290-L1312) and [```ShiftEnumPointer```](https://github.com/cristianbuse/VBA-FastDictionary/blob/ae95c6e909625c3d95328f64bb3e01a2232485fc/src/Dictionary.cls#L1314-L1356) methods.
+To account for all the scenarios above, this Dictionary has additional management in the [```RemoveUnusedEnums```](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L1268-L1294) and [```ShiftEnumPointer```](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L1296-L1335) methods.
 
 ## Additional functionality
 
