@@ -1277,7 +1277,6 @@ Private Sub RemoveUnusedEnums(Optional ByVal searchPtr As LongPtr _
         For Each e In Vars.Enums.enumsColl
             Dim ptr As LongPtr: ptr = ObjPtr(e)
             .saP.pvData = ptr + nextItemOffset
-            .saP.rgsabound0.cElements = 1
             If Mem.RPtr(0) = nullPtr Then
                 Vars.Enums.enumsColl.Remove CStr(ptr)
             ElseIf Mem.RPtr(0) = searchPtr Then
@@ -1297,7 +1296,6 @@ Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
     Dim e As Variant 'IEnumVARIANT does not work with For Each
     For Each e In Vars.Enums.enumsColl
         Mem.Common(0).saP.pvData = ObjPtr(e) + nextItemOffset
-        Mem.Common(0).saP.rgsabound0.cElements = 1
         Mem.RPtr(0) = Mem.RPtr(0) + addrShift
     Next e
     '
@@ -1317,6 +1315,7 @@ Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
                 Mem.RPtr(i) = Mem.RPtr(i) + addrShift
             Next i
         End If
+        .saP.rgsabound0.cElements = 1
         .saP.pvData = .dPtr
     End With
 #Else
