@@ -118,6 +118,7 @@ Private Enum InternalConstants 'Hides constants from Locals window
 #Else
     ptrSize = 4
 #End If
+    prevOffset = ptrSize 'Previous instance pointer immediately after vTable
     notFound = -1
     intSize = 2
     intsPerDouble = 4
@@ -204,6 +205,8 @@ Private Type Globals
     d As Double 'For hashing numbers
     dPtr As LongPtr
     lastInstancePtr As LongPtr
+    lastTerminatedPtr As LongPtr
+    lastTerminatedNextPtr As LongPtr
     nextPtrOffset As LongPtr
     defPtrOffset As LongPtr
 End Type
@@ -244,7 +247,6 @@ End Type
 Private Type DeallocVars
     ThisPtr As LongPtr
     NextDictPtr As LongPtr
-    IsPendingTerminate As Boolean
 End Type
 
 Private Type DictionaryVariables
@@ -263,7 +265,6 @@ Private Type DictionaryVariables
     UBound As Long
     UsedCount As Long
     DefInstance As Dictionary 'Avoids deallocation of default (Predeclared) dict
-    IsInitialized As Boolean
     Dealloc As DeallocVars
 End Type
 
@@ -661,7 +662,7 @@ Public Property Let CompareMode(ByVal compMode As VbCompareMethod)
 #If Windows Then
     If Vars.Compare > vbTextCompare Then
         Vars.LocaleID = Vars.Compare
-    ElseIf Vars.IsInitialized Then
+    Else
         Vars.LocaleID = Mem.Common(0).lcid
     End If
 #End If
@@ -1176,8 +1177,7 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
     End If
     '
     'Avoid deallocation of Global Instance
-    h.lastInstancePtr = v.Dealloc.ThisPtr
-    If h.lastInstancePtr <> Vars.Dealloc.ThisPtr Then Set v.DefInstance = Me
+    If v.Dealloc.ThisPtr <> Vars.Dealloc.ThisPtr Then Set v.DefInstance = Me
     '
 #If Mac Then
     CopyMemory ByVal VarPtr(m), saPtrs(0), ptrSize * 4
@@ -1193,31 +1193,80 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
     Next i
     h.saP.rgsabound0.cElements = 1
 #End If
-    'Each VB class stores previous instance pointer immediately after vTable
-    h.saP.pvData = h.lastInstancePtr + ptrSize
+    h.saP.pvData = v.Dealloc.ThisPtr + prevOffset
     '
     Dim prevPtr As LongPtr: prevPtr = Mem.RPtr(0)
-    If prevPtr <> nullPtr Then
-        'Internal variables are always at fixed offset from instance pointer
-        h.saP.pvData = prevPtr + h.nextPtrOffset
-        'Previous instance will have a pointer to this instance
-        Mem.RPtr(0) = h.lastInstancePtr
-        '
-        'In case user modified the global instance e.g. Set Dictionary = Nothing
-        If Vars.DefInstance Is Nothing Then
+    Dim tempPtr As LongPtr
+    '
+    If prevPtr = nullPtr Then 'Can only be def instance
+        h.lastInstancePtr = v.Dealloc.ThisPtr
+        h.saP.pvData = h.dPtr
+        Exit Sub
+    End If
+    '
+    'In case user modified the global instance e.g. Set Dictionary = Nothing
+    If v.DefInstance Is Nothing Then
+        Do
             h.saP.pvData = prevPtr + h.defPtrOffset
-            prevPtr = Mem.RPtr(0)
-            If (prevPtr <> nullPtr) And (prevPtr <> Vars.Dealloc.ThisPtr) Then
-                h.saP.pvData = VarPtr(temp)
-                Mem.RPtr(0) = prevPtr 'Unmanaged - ref count not increased
-                Set Vars.DefInstance = temp
-                Mem.RPtr(0) = nullPtr 'Ref count not decreased
+            tempPtr = Mem.RPtr(0)
+            If tempPtr Then Exit Do
+            '
+            h.saP.pvData = prevPtr + prevOffset
+            If Mem.RPtr(0) = nullPtr Then
+                h.saP.pvData = prevPtr + h.nextPtrOffset
+                If Mem.RPtr(0) Then tempPtr = prevPtr
+                Exit Do
             End If
+            prevPtr = Mem.RPtr(0)
+        Loop
+        If (tempPtr <> nullPtr) And (tempPtr <> Vars.Dealloc.ThisPtr) Then
+            'Link to the 'real' def instance
+            h.saP.pvData = VarPtr(temp)
+            Mem.RPtr(0) = tempPtr 'Unmanaged - ref count not increased
+            Set Vars.DefInstance = temp
+            Mem.RPtr(0) = nullPtr 'Ref count not decreased
+            '
+            #If Windows Then
+                Set c = Nothing
+            #End If
+            Vars.DefInstance.InitStructs Vars, Mem
+            With Mem.Common(0)
+                .saP.pvData = .lastTerminatedPtr + prevOffset
+                If Mem.RPtr(0) = v.Dealloc.ThisPtr Then
+                    'Previous instance is currently initializing and it is
+                    '   definitely reusing previously terminated memory
+                    v.Dealloc.NextDictPtr = .lastTerminatedPtr
+                    .saP.pvData = .lastTerminatedPtr + .nextPtrOffset
+                    Mem.RPtr(0) = .lastTerminatedNextPtr
+                    .lastTerminatedNextPtr = v.Dealloc.ThisPtr
+                    .saP.pvData = v.Dealloc.ThisPtr + prevOffset
+                    .lastTerminatedPtr = Mem.RPtr(0)
+                End If
+                .saP.pvData = .dPtr
+            End With
+            Exit Sub
         End If
     End If
     '
+    If v.Dealloc.ThisPtr = h.lastTerminatedPtr Then
+        'Reusing previously terminated memory
+        v.Dealloc.NextDictPtr = h.lastTerminatedNextPtr
+        h.lastTerminatedPtr = prevPtr
+        h.lastTerminatedNextPtr = v.Dealloc.ThisPtr
+    Else
+        If prevPtr = h.lastInstancePtr Then
+            h.lastInstancePtr = v.Dealloc.ThisPtr
+        Else 'The previous instance could be initializing
+            h.saP.pvData = prevPtr + prevOffset
+            If Mem.RPtr(0) = h.lastInstancePtr Then
+                h.lastInstancePtr = v.Dealloc.ThisPtr
+            End If
+        End If
+    End If
+    h.saP.pvData = prevPtr + h.nextPtrOffset
+    Mem.RPtr(0) = v.Dealloc.ThisPtr
+    '
     h.saP.pvData = h.dPtr
-    v.IsInitialized = True
 End Sub
     
 Public Function Factory() As Dictionary
@@ -1382,8 +1431,6 @@ End Sub
 'Postpones termination to a later stage where we have full control over how VBA
 '   traverses the linked list of all dictionary instances
 Private Sub Class_Terminate()
-    If Vars.Dealloc.IsPendingTerminate Then Exit Sub 'Second terminate call
-    '
     'Deallocate enumerators just in case they are pointing to Keys
     Set Vars.Enums.emptyColl = Nothing
     Set Vars.Enums.enumsColl = Nothing
@@ -1392,12 +1439,9 @@ Private Sub Class_Terminate()
     Erase Vars.Keys
     Erase Vars.Items
     '
-    'Cache this instance inside the global instance
-    If Not Vars.DefInstance Is Nothing Then
-        Vars.DefInstance.DelayTermination Me, Vars
-        Set Vars.DefInstance = Nothing
-    End If
-    Vars.Dealloc.IsPendingTerminate = True
+    'Cache this instance inside the global instance and destroy later
+    Vars.DefInstance.DelayTermination Me, Vars
+    Set Vars.DefInstance = Nothing
 End Sub
 
 'When VB* terminates a class instance, it traverses all instances starting from
@@ -1411,60 +1455,75 @@ Friend Sub DelayTermination(ByRef dictToDelay As Dictionary _
                           , ByRef v As DictionaryVariables)
     #If x64 Then
         Const nullPtr As LongLong = 0^
-        Const stateOffset As LongLong = 76
     #Else
         Const nullPtr As Long = 0&
-        Const stateOffset As Long = 44
     #End If
-    Const prevOffset As Long = ptrSize
-    Const stateActive As Integer = &H100F
     Static pendingDict As Dictionary
     Static pendingPtr As LongPtr
+    Static lastDict As Dictionary
+    Static lastDictPtr As LongPtr
     Dim prevPtr As LongPtr
-    Dim NextPtr As LongPtr
-    Dim leadingPtr As LongPtr
-    Dim leadingPrevPtr As LongPtr
+    Dim followPtr As LongPtr
     Dim secondLastPtr As LongPtr
-    Dim newerPtr As LongPtr
+    Dim tempDict As Dictionary
     '
+    If pendingDict Is Nothing Then
+        Set pendingDict = dictToDelay
+        pendingPtr = v.Dealloc.ThisPtr
+        Exit Sub
+    End If
     With Mem.Common(0)
-        'Revert state so that Class_Terminate can be called a second time
-        .saI.pvData = v.Dealloc.ThisPtr + stateOffset
-        Mem.RInt(0) = stateActive
+        If pendingPtr = .lastInstancePtr Then
+            'We force keep the last instance active to avoid extra logic
+            If lastDict Is Nothing Then
+                Set lastDict = pendingDict
+                lastDictPtr = pendingPtr
+                Set pendingDict = dictToDelay
+                pendingPtr = v.Dealloc.ThisPtr
+                Exit Sub
+            End If
+            '
+            Set tempDict = lastDict
+            Set lastDict = pendingDict
+            Set pendingDict = tempDict
+            Set tempDict = Nothing
+            pendingPtr = lastDictPtr
+            lastDictPtr = .lastInstancePtr
+        End If
         '
-        If pendingDict Is Nothing Then GoTo PrepareNext
+        If .lastTerminatedPtr = nullPtr Then
+            .lastTerminatedPtr = Vars.Dealloc.ThisPtr 'Use Def instance
+        End If
         '
         .saP.pvData = pendingPtr + prevOffset
         prevPtr = Mem.RPtr(0)
         '
-        If prevPtr = nullPtr Then GoTo PrepareNext 'First ever instance
-        '
-        'Find previous / leading active instance
-        leadingPtr = prevPtr
-        Do
-            .saP.pvData = leadingPtr + prevOffset
-            .saI.pvData = leadingPtr + stateOffset
-            If Mem.RInt(0) = stateActive Then Exit Do
-            If Mem.RPtr(0) = nullPtr Then Exit Do
-            leadingPtr = Mem.RPtr(0)
-        Loop
-        '
-        'Make VB 'believe' that leading active instance is first instance
-        '   so that a shorter list is traversed when we terminate 'pending'
-        leadingPrevPtr = Mem.RPtr(0)
-        Mem.RPtr(0) = nullPtr
-        '
-        If pendingPtr = .lastInstancePtr Then
-            Set pendingDict = Nothing 'Traverses up to leadingPtr only
-            Mem.RPtr(0) = leadingPrevPtr
-            .lastInstancePtr = leadingPtr
-            .saP.pvData = leadingPtr + .nextPtrOffset
-            Mem.RPtr(0) = nullPtr
-            GoTo PrepareNext
+        If prevPtr = .lastTerminatedPtr Then
+            .saP.pvData = pendingPtr + .nextPtrOffset
+            followPtr = Mem.RPtr(0)
+        Else 'Insert after last terminated
+            Mem.RPtr(0) = .lastTerminatedPtr
+            .saP.pvData = .lastTerminatedPtr + .nextPtrOffset
+            '
+            Dim tempPtr As LongPtr: tempPtr = Mem.RPtr(0)
+            Mem.RPtr(0) = pendingPtr
+            '
+            .saP.pvData = tempPtr + prevOffset
+            Mem.RPtr(0) = pendingPtr
+            '
+            .saP.pvData = pendingPtr + .nextPtrOffset
+            followPtr = Mem.RPtr(0)
+            Mem.RPtr(0) = tempPtr
+            '
+            If prevPtr <> nullPtr Then 'Not first ever instance
+                .saP.pvData = prevPtr + .nextPtrOffset
+                Mem.RPtr(0) = followPtr
+            End If
+            '
+            .saP.pvData = followPtr + prevOffset
+            Mem.RPtr(0) = prevPtr
+            followPtr = tempPtr
         End If
-        '
-        .saP.pvData = pendingPtr + .nextPtrOffset
-        NextPtr = Mem.RPtr(0)
         '
         'Make VB 'believe' that trailing instance is the last instance
         '   so that a shorter list is traversed when we terminate 'pending'
@@ -1472,29 +1531,17 @@ Friend Sub DelayTermination(ByRef dictToDelay As Dictionary _
         secondLastPtr = Mem.RPtr(0)
         Mem.RPtr(0) = pendingPtr
         '
-        Set pendingDict = Nothing 'Traverses up to leadingPtr only + last
+        Set pendingDict = Nothing 'Traverse short list and deallocate as needed
         '
-        'Restore both leading and trailing instance pointers
-        newerPtr = Mem.RPtr(0)
-        Mem.RPtr(0) = secondLastPtr
-        .saP.pvData = leadingPtr + prevOffset
-        Mem.RPtr(0) = leadingPrevPtr
+        Mem.RPtr(0) = secondLastPtr 'Restore to long list
         '
-        'Restore adjacent pointers as needed
-        If newerPtr = pendingPtr Then
-            .saP.pvData = pendingPtr + prevOffset
-            If prevPtr <> Mem.RPtr(0) Then
-                .saP.pvData = Mem.RPtr(0) + .nextPtrOffset
-                Mem.RPtr(0) = pendingPtr
-            End If
-        Else 'This branch does not seem to be needed but safer to keep
-            .saP.pvData = NextPtr + prevOffset
-            Mem.RPtr(0) = newerPtr
-            .saP.pvData = newerPtr + .nextPtrOffset
-            Mem.RPtr(0) = NextPtr
+        .saP.pvData = pendingPtr + prevOffset
+        If .lastTerminatedPtr <> Mem.RPtr(0) Then 'Memory was reclaimed
+            .saP.pvData = Mem.RPtr(0) + .nextPtrOffset
+            Mem.RPtr(0) = pendingPtr
         End If
-PrepareNext:
-        .saI.pvData = .dPtr
+        .lastTerminatedPtr = pendingPtr
+        .lastTerminatedNextPtr = followPtr
         .saP.pvData = .dPtr
         '
         Set pendingDict = dictToDelay
