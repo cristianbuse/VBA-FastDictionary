@@ -95,6 +95,7 @@ Option Compare Binary
 #Else 'Windows
     #If VBA7 Then
         Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
+        Private Declare PtrSafe Function LocalSize Lib "kernel32" (ByVal hMem As LongPtr) As Long
     #Else
         Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As Long)
     #End If
@@ -266,6 +267,7 @@ Private Type DictionaryVariables
     UsedCount As Long
     DefInstance As Dictionary 'Avoids deallocation of default (Predeclared) dict
     Dealloc As DeallocVars
+    IsInitialized As Boolean
 End Type
 
 'Class members
@@ -896,7 +898,6 @@ End Sub
 'Raises Error:
 '   -   9: invalid key (key is not associated with any element)
 Public Sub Remove(ByRef Key As Variant)
-    Dim hVal As Long
     Dim groupSlot As Long
     Dim posInGroup As Long
     Dim lastPos As Long
@@ -1122,9 +1123,11 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
         saC.rgsabound0.cElements = 1
         saPtrs(4) = VarPtr(saC)
         '
-        On Error Resume Next 'In case scrun.dll not available
-        Set temp = CreateObject("Scripting.Dictionary")
-        On Error GoTo 0
+        If InIde() Then
+            On Error Resume Next 'In case scrun.dll not available
+            Set temp = CreateObject("Scripting.Dictionary")
+            On Error GoTo 0
+        End If
         '
         h.isScrAvailable = Not (temp Is Nothing)
         If h.isScrAvailable Then
@@ -1162,15 +1165,28 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
             Mem.RPtr(0) = VarPtr(h.sdl)
         End If
         '
-        'Increase stack frame size for 'NewEnum' to avoid For Each.. x64 bug
         #If x64 Then
-            h.saP.pvData = ObjPtr(Me) 'vtbl
+            'Increase stack frame size for 'NewEnum' to avoid For Each.. x64 bug
+            'https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes
+            h.saP.pvData = Vars.Dealloc.ThisPtr 'vtbl
             h.saP.pvData = Mem.RPtr(0) + ptrSize * 7 'NewEnum address
             h.saP.pvData = Mem.RPtr(0) + 21 'SUB R12, 0x10
             '
             If (Mem.RPtr(0) And &HFFFF^) = &H8149^ Then
                 'SUB found. Replace 0x10 (16) with 0x800 (2048) bytes
                 Mem.RPtr(0) = Mem.RPtr(0) And &HFF00000000FFFFFF^ Or &H800000000^
+            End If
+            '
+            'Increase stack frame size for 'Class_Terminate' to avoid x64 bugs
+            'https://github.com/cristianbuse/VBA-FastDictionary/issues/10
+            'https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug
+            h.saP.pvData = Vars.Dealloc.ThisPtr + LocalSize(Vars.Dealloc.ThisPtr) - ptrSize * 3 'IClassModuleEvt
+            h.saP.pvData = Mem.RPtr(0) + ptrSize * 4 '_Terminate address
+            h.saP.pvData = Mem.RPtr(0) + 21 'SUB R12, 0x08
+            '
+            If (Mem.RPtr(0) And &HFFFF^) = &H8149^ Then
+                'SUB found. Replace 0x8 (8) with 0x80 (128) bytes
+                Mem.RPtr(0) = Mem.RPtr(0) And &HFF00000000FFFFFF^ Or &H80000000^
             End If
         #End If
 #End If
@@ -1201,6 +1217,7 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
     If prevPtr = nullPtr Then 'Can only be def instance
         h.lastInstancePtr = v.Dealloc.ThisPtr
         h.saP.pvData = h.dPtr
+        v.IsInitialized = True
         Exit Sub
     End If
     '
@@ -1267,7 +1284,17 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
     Mem.RPtr(0) = v.Dealloc.ThisPtr
     '
     h.saP.pvData = h.dPtr
+    v.IsInitialized = True
 End Sub
+
+'https://stackoverflow.com/a/9516565/8488913
+Public Property Get InIde() As Boolean
+    Debug.Assert SetTrue(InIde)
+End Property
+Private Function SetTrue(ByRef b As Boolean) As Boolean
+    b = True
+    SetTrue = True
+End Function
     
 Public Function Factory() As Dictionary
     Set Factory = New Dictionary
@@ -1280,6 +1307,7 @@ End Property
 Private Function DictEnum() As IUnknown
     Dim hadEnum As Boolean
     '
+    If Not Vars.IsInitialized Then Exit Function 'In case called from IDE before Init
     With Vars.Enums
         hadEnum = .hasEnum
         If .hasEnum Then RemoveUnusedEnums
