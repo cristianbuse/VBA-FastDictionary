@@ -1176,18 +1176,18 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
                 'SUB found. Replace 0x10 (16) with 0x800 (2048) bytes
                 Mem.RPtr(0) = Mem.RPtr(0) And &HFF00000000FFFFFF^ Or &H800000000^
             End If
-            '
-            'Increase stack frame size for 'Class_Terminate' to avoid x64 bugs
-            'https://github.com/cristianbuse/VBA-FastDictionary/issues/10
-            'https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug
-            h.saP.pvData = Vars.Dealloc.ThisPtr + LocalSize(Vars.Dealloc.ThisPtr) - ptrSize * 3 'IClassModuleEvt
-            h.saP.pvData = Mem.RPtr(0) + ptrSize * 4 '_Terminate address
-            h.saP.pvData = Mem.RPtr(0) + 21 'SUB R12, 0x08
-            '
-            If (Mem.RPtr(0) And &HFFFF^) = &H8149^ Then
-                'SUB found. Replace 0x8 (8) with 0x80 (128) bytes
-                Mem.RPtr(0) = Mem.RPtr(0) And &HFF00000000FFFFFF^ Or &H80000000^
-            End If
+'            '
+'            'Increase stack frame size for 'Class_Terminate' to avoid x64 bugs
+'            'https://github.com/cristianbuse/VBA-FastDictionary/issues/10
+'            'https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug
+'            h.saP.pvData = Vars.Dealloc.ThisPtr + LocalSize(Vars.Dealloc.ThisPtr) - ptrSize * 3 'IClassModuleEvt
+'            h.saP.pvData = Mem.RPtr(0) + ptrSize * 4 '_Terminate address
+'            h.saP.pvData = Mem.RPtr(0) + 21 'SUB R12, 0x08
+'            '
+'            If (Mem.RPtr(0) And &HFFFF^) = &H8149^ Then
+'                'SUB found. Replace 0x8 (8) with 0x80 (128) bytes
+'                Mem.RPtr(0) = Mem.RPtr(0) And &HFF00000000FFFFFF^ Or &H80000000^
+'            End If
         #End If
 #End If
     End If
