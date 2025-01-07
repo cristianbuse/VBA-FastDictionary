@@ -33,6 +33,8 @@ This Dictionary does not require any DLL references or any kind of external libr
   - [Enumerator management](#enumerator-management)
 - [Additional functionality](#additional-functionality)
 - [OLE Automation](#ole-automation)
+- [x64 Assembly](#x64-assembly)
+  - [VBA x64 class method call mechanism](#vba-x64-class-method-call-mechanism)
 
 ***
 
@@ -698,3 +700,186 @@ library VBA
     // TLib : OLE Automation : {00020430-0000-0000-C000-000000000046}
     importlib("stdole2.tlb");
 ```
+
+## x64 Assembly
+
+This class implements fixes by overwriting x64 assembly bytes for the following known VBA x64 bugs:
+- [Bug with For Each enumeration on x64 Custom Classes](https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes)
+- [VBA takes wrong branch at If-statement - severe compiler bug?](https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug) which is same as [issue #10](https://github.com/cristianbuse/VBA-FastDictionary/issues/10)
+
+First, let's understand how x64 methods are called.
+
+### VBA x64 class method call mechanism
+
+The first 8 bytes pointed by a class instance pointer hold the address of the class virtual table (derived from IDispatch). Let's see the assembly for a ```Function``` and a ```Sub``` on x64.
+In an empty project add a ```Class1``` with the following code:
+```VBA
+Option Explicit
+
+Public Function Test() As Variant
+    Debug.Print "Test"
+End Function
+Public Sub Test2()
+    Dim i As Long
+    For i = 1 To 3
+        Debug.Print i
+    Next i
+End Sub
+```
+Now add the following code in a standard .bas module and run the ```TestClassMethodASM``` method:
+```VBA
+Option Explicit
+#If Win64 Then
+
+Const PTR_SIZE = 8
+
+Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
+Private Function MemLongPtr(ByVal addr As LongLong) As LongPtr
+    CopyMemory MemLongPtr, ByVal addr, PTR_SIZE
+End Function
+
+Sub TestClassMethodASM()
+    Dim c As New Class1
+    Dim vTable As LongPtr
+    Dim testPtr As LongPtr
+    Dim b() As Byte
+    '
+    vTable = MemLongPtr(ObjPtr(c))
+    testPtr = MemLongPtr(vTable + PTR_SIZE * 7) '7 because IDispatch has methods 0 to 6
+    '
+    ReDim b(1 To 69)
+    CopyMemory b(1), ByVal testPtr, UBound(b)
+    Debug.Print StringToHex(CStr(b))
+End Sub
+Public Function StringToHex(ByRef s As String) As String
+    Static map(0 To 255) As String
+    Dim b() As Byte: b = s
+    Dim i As Long
+
+    If LenB(map(0)) = 0 Then
+        For i = 0 To 255
+            map(i) = Right$("0" & Hex$(i), 2)
+        Next i
+    End If
+
+    StringToHex = Space$(LenB(s) * 2 + 2)
+    Mid$(StringToHex, 1, 2) = "0x"
+
+    For i = LBound(b) To UBound(b)
+        Mid$(StringToHex, (i + 1) * 2 + 1, 2) = map(b(i))
+    Next i
+End Function
+#End If
+```
+The resulting hex can be translated to this:
+```assembly
+; Typical assembly for a class Function
+;-------------------------------------------------------------------------------
+66490F6EEC             ; MOVQ XMM5,R12                    ; Saves R12 value in XMM5     
+48B8 987307FAFA7F0000  ; MOV RAX,00007FFAFA077398         ; Copies literal value into RAX - this value seems to always be the same
+488B00                 ; MOV RAX,QWORD PTR [RAX]          ; Reads memory value pointed by RAX into RAX (Dereference)
+4C8B20                 ; MOV R12,QWORD PTR [RAX]          ; Reads memory value pointed by RAX into R12 (Dereference)
+4981EC 10000000        ; SUB R12,0000000000000010         ; Adds space (negative) for 2 pointers to the stack, one for instance pointer and one for function return
+498BC4                 ; MOV RAX,R12                      ; Saves R12 value into RAX - seems useless because RAX gets overwritten just below in the second last instruction
+49898C24 00000000      ; MOV QWORD PTR [R12+00000000],RCX ; Saves RCX value at the address pointed by R12
+49899424 08000000      ; MOV QWORD PTR [R12+00000008],RDX ; Saves RDX value at the address pointed by R12 + 0x8
+48BA F0D1254C0E020000  ; MOV RDX,0000020E4C25D1F0         ; Pushes literal value to RDX. The values is always the address of the function pointer less 84 bytes i.e. an offset from the MOVQ XMM5,R12  instruction above
+48B8 8A1800FAFA7F0000  ; MOV RAX,00007FFAFA00188A         ; Pushes literal value to RAX. This is jumped to in the next instruction and is the same value for all methods in the class i.e. a wrapper, most likely for errror handling
+FFE0                   ; JMP RAX                          ; Jumps to asm pointer by RAX as mentioned above. This wrapper will use the address passed in RDX to call the required asm for the methods
+; ...
+
+
+; Typical assembly for a class Sub
+;-------------------------------------------------------------------------------
+66490F6EEC             ; MOVQ XMM5,R12                      
+48B8 987307FAFA7F0000  ; MOV RAX,00007FFAFA077398         
+488B00                 ; MOV RAX,QWORD PTR [RAX]          
+4C8B20                 ; MOV R12,QWORD PTR [RAX]          
+4981EC 08000000        ; SUB R12,0000000000000008         ; Adds space (negative) for instance pointer to the stack
+498BC4                 ; MOV RAX,R12                      
+49898C24 00000000      ; MOV QWORD PTR [R12+00000000],RCX 
+                                                          ; RDX value is no longer saved at the address pointed by R12 + 0x8 (compared to a Function)
+48BA 302820570E020000  ; MOV RDX,0000020E4C25D1F0         ; The literal value is changed every time code is compiled
+48B8 8A1800FAFA7F0000  ; MOV RAX,00007FFAFA00188A         
+FFE0                   ; JMP RAX                          
+; ...
+```
+
+In other words, the asm code pointed by the entries in the class virtual table is calling wrapper code. All methods will call the same global method pointed by the ```RAX``` register which in turn will call the method pointed by the ```RDX``` register. 
+
+The ```RDX``` value seems to always be the function pointer address less 84 bytes e.g.```testPtr - 84```. If we investigate further, these 84 bytes container other pointers and after some testing it seems that the actual method asm is held at a 8 byte offset i.e. at -84 + 8 = -76 from the function pointer. This new location will also contain the exact size of the asm code.
+
+The following example replaces the assembly instructions for one method with the assembly instructions from another method. Call the ```TestSwap``` method:
+```VBA
+Option Explicit
+#If Win64 Then
+
+Const PTR_SIZE = 8
+
+Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
+Private Function MemLongPtr(ByVal addr As LongLong) As LongPtr
+    CopyMemory MemLongPtr, ByVal addr, PTR_SIZE
+End Function
+Private Function MemLong(ByVal addr As LongLong) As Long
+    CopyMemory MemLong, ByVal addr, 4
+End Function
+
+Sub TestSwap()
+    Dim c As New Class1
+    Dim vTable As LongPtr
+    Dim testPtr As LongPtr
+    Dim test2Ptr As LongPtr
+    Dim testAsmPtr As LongPtr
+    Dim test2AsmPtr As LongPtr
+    Dim asm2Size As Long
+    Dim b() As Byte
+    
+    vTable = MemLongPtr(ObjPtr(c))
+    testPtr = MemLongPtr(vTable + PTR_SIZE * 7)
+    test2Ptr = MemLongPtr(vTable + PTR_SIZE * 8)
+    '
+    testAsmPtr = MemLongPtr(testPtr - 76)
+    test2AsmPtr = MemLongPtr(test2Ptr - 76)
+    '
+    asm2Size = MemLong(test2AsmPtr + 12)
+    '
+    ReDim b(1 To asm2Size + 16) As Byte
+    '
+    'Store asm for Test method
+    CopyMemory b(1), ByVal testAsmPtr - asm2Size, UBound(b)
+    '
+    'Replace Test asm bytes with Test2 asm bytes. Comment this line to run the original Test asm bytes
+    CopyMemory ByVal testAsmPtr - asm2Size, ByVal test2AsmPtr - asm2Size, UBound(b)
+    '
+    'Call Test which actually runs the bytes we just copied
+    c.Test
+    '
+    'Restore Test asm bytes
+    CopyMemory ByVal testAsmPtr - asm2Size, b(1), UBound(b)
+    '
+    Debug.Print StringToHex(CStr(b))
+End Sub
+Public Function StringToHex(ByRef s As String) As String
+    Static map(0 To 255) As String
+    Dim b() As Byte: b = s
+    Dim i As Long
+
+    If LenB(map(0)) = 0 Then
+        For i = 0 To 255
+            map(i) = Right$("0" & Hex$(i), 2)
+        Next i
+    End If
+
+    StringToHex = Space$(LenB(s) * 2 + 2)
+    Mid$(StringToHex, 1, 2) = "0x"
+
+    For i = LBound(b) To UBound(b)
+        Mid$(StringToHex, (i + 1) * 2 + 1, 2) = map(b(i))
+    Next i
+End Function
+#End If
+```
+
+As seen in the above example, we can overwrite the original assembly instructions with the ones from another method.
+
+To be continued..
