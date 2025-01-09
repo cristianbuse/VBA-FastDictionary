@@ -100,6 +100,9 @@ Option Compare Binary
         Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As Long)
     #End If
 #End If
+#If TWINBASIC Then
+    Private Declare PtrSafe Sub VariantCopy Lib "oleaut32.dll" (ByRef pvargDest As Variant, ByVal pvargSrc As LongPtr)
+#End If
 #If VBA7 = 0 Then
     Private Enum LongPtr
         [_]
@@ -287,6 +290,26 @@ Attribute NewEnum.VB_UserMemId = -4
 'Attribute NewEnum.VB_UserMemId = -4
     Set NewEnum = DictEnum
 End Function
+
+#If TWINBASIC Then
+Public Sub IEnumVARIANT_Next(ByVal celt As Long _
+                           , ByRef rgVar As Variant _
+                           , ByRef pceltFetched As Long)
+    Dim ptr As LongPtr: ptr = ObjPtr(Me) + ptrSize
+    Dim temp As LongPtr
+    '
+    CopyMemory temp, ByVal ptr, ptrSize
+    If temp = 0 Then Exit Sub
+    '
+    VariantCopy rgVar, temp
+    #If x64 Then
+        CopyMemory ByVal ptr, ByVal temp + 40, ptrSize
+    #Else
+        CopyMemory ByVal ptr, ByVal temp + 24, ptrSize
+    #End If
+    pceltFetched = 1
+End Sub
+#End If
 
 Private Sub Init(Optional ByVal newGroupCount As Long = initialGroupCount)
     InitHashMap newGroupCount
@@ -687,8 +710,12 @@ Attribute Item.VB_UserMemId = 0
 'Attribute Item.VB_UserMemId = 0
     Dim i As Long: i = GetIndex(Key)
     '
+#If TWINBASIC Then
+    If i = notFound Then Err.Raise 9
+#Else
     'A check like i = notFound is avoided for speed purposes
     '   because error 9 is raised anyway when accessing the data arrays
+#End If
 #If x64 Then
     If Vars.Meta(i) And isItemObjBit Then
 #Else
@@ -776,8 +803,12 @@ Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     If GetIndex(NewKey, hVal, , controlByte) > notFound Then Err.Raise 457
     i = GetIndex(OldKey, , groupSlot, , posInGroup)
     '
+#If TWINBASIC Then
+    If i = notFound Then Err.Raise 9
+#Else
     'A check like i = notFound is avoided for speed purposes
     '   because error 9 is raised anyway when accessing the Keys array
+#End If
     '
     'Replace Key and Meta while preserving Item
 #If x64 Then
@@ -1173,7 +1204,7 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
         '
         'More details about the below fix at:
         'https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#x64-assembly
-        #If x64 Then
+        #If x64 And (TWINBASIC = 0) Then
             Set temp = New Collection
             '
             'NewEnum address
@@ -1218,13 +1249,14 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
         If v.Compare <= vbTextCompare Then v.LocaleID = h.lcid
     End If
     '
-    h.saP.rgsabound0.cElements = 5
     h.saP.pvData = VarPtr(m)
+    h.saP.rgsabound0.cElements = 5
     For i = 0 To 4
         Mem.RPtr(i) = saPtrs(i)
     Next i
     h.saP.rgsabound0.cElements = 1
 #End If
+#If TWINBASIC = 0 Then
     h.saP.pvData = v.Dealloc.ThisPtr + prevOffset
     '
     Dim prevPtr As LongPtr: prevPtr = Mem.RPtr(0)
@@ -1297,6 +1329,7 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
     End If
     h.saP.pvData = prevPtr + h.nextPtrOffset
     Mem.RPtr(0) = v.Dealloc.ThisPtr
+#End If
     '
     h.saP.pvData = h.dPtr
     v.IsInitialized = True
@@ -1330,6 +1363,21 @@ Private Function DictEnum() As IUnknown
         .hasEnum = True
         .enumsColl.Add DictEnum, CStr(ObjPtr(DictEnum))
     End With
+    '
+#If TWINBASIC Then
+    Static vtbl(0 To 6) As LongPtr
+    Dim tempPtr As LongPtr: tempPtr = ObjPtr(DictEnum)
+    Dim vtblptr As LongPtr
+    '
+    CopyMemory vtblptr, ByVal tempPtr, ptrSize
+    CopyMemory vtbl(0), ByVal vtblptr, ptrSize * 7 'Copy entire original virtual function table
+    '
+    CopyMemory vtbl(3), ByVal Vars.Dealloc.ThisPtr, ptrSize
+    CopyMemory vtbl(3), ByVal vtbl(3) + ptrSize * 8, ptrSize 'Replace 'Next'
+    '
+    'Swap original vTable with our own (5 out of 7 are still original functions)
+    CopyMemory ByVal tempPtr, VarPtr(vtbl(0)), ptrSize
+#End If
     If Vars.UsedCount = 0 Then Exit Function
     '
     Dim i As Long
@@ -1343,7 +1391,11 @@ Private Function DictEnum() As IUnknown
         #End If
     End If
     With Mem.Common(0)
-        .saP.pvData = ObjPtr(DictEnum) + nextItemOffset
+        #If TWINBASIC Then
+            .saP.pvData = ObjPtr(DictEnum) + ptrSize
+        #Else
+            .saP.pvData = ObjPtr(DictEnum) + nextItemOffset
+        #End If
         Mem.RPtr(0) = VarPtr(Vars.Keys(i))
         .saP.pvData = .dPtr
     End With
@@ -1377,7 +1429,12 @@ Private Function DictEnum() As IUnknown
         .saP.pvData = .dPtr
     End With
 #Else
-    Const enumVarSize As Long = 28
+    #If TWINBASIC Then
+        Const enumVarSize As Long = 32
+    #Else
+        Const enumVarSize As Long = 28
+    #End If
+    '
     If hasGaps Then
         j = i
         For i = i + 1 To Vars.Count - 1
@@ -1408,7 +1465,11 @@ Private Sub RemoveUnusedEnums(Optional ByVal searchPtr As LongPtr _
     With Mem.Common(0)
         For Each e In Vars.Enums.enumsColl
             Dim ptr As LongPtr: ptr = ObjPtr(e)
-            .saP.pvData = ptr + nextItemOffset
+            #If TWINBASIC Then
+                .saP.pvData = ptr + ptrSize
+            #Else
+                .saP.pvData = ptr + nextItemOffset
+            #End If
             If Mem.RPtr(0) = nullPtr Then
                 Vars.Enums.enumsColl.Remove CStr(ptr)
             ElseIf Mem.RPtr(0) = searchPtr Then
@@ -1427,7 +1488,11 @@ End Sub
 Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
     Dim e As Variant 'IEnumVARIANT does not work with For Each
     For Each e In Vars.Enums.enumsColl
-        Mem.Common(0).saP.pvData = ObjPtr(e) + nextItemOffset
+        #If TWINBASIC Then
+            Mem.Common(0).saP.pvData = ObjPtr(e) + ptrSize
+        #Else
+            Mem.Common(0).saP.pvData = ObjPtr(e) + nextItemOffset
+        #End If
         Mem.RPtr(0) = Mem.RPtr(0) + addrShift
     Next e
     '
@@ -1471,6 +1536,22 @@ Private Sub Class_Initialize()
     Dictionary.InitStructs Vars, Mem
 End Sub
 
+#If TWINBASIC Then
+Private Sub Class_Terminate()
+    #If Windows Then
+        'Collection
+        Mem.Common(0).saP.pvData = VarPtr(Mem) + ptrSize * 4
+        Mem.RPtr(0) = 0
+    #End If
+    'Lookup
+    Mem.Common(0).saP.pvData = VarPtr(Mem) + ptrSize
+    Mem.RPtr(0) = 0
+    '
+    'Common
+    Mem.Common(0).saP.pvData = VarPtr(Mem)
+    Mem.RPtr(0) = 0
+End Sub
+#Else
 'Postpones termination to a later stage where we have full control over how VBA
 '   traverses the linked list of all dictionary instances
 Private Sub Class_Terminate()
@@ -1591,3 +1672,4 @@ Friend Sub DelayTermination(ByRef dictToDelay As Dictionary _
         pendingPtr = v.Dealloc.ThisPtr
     End With
 End Sub
+#End If
