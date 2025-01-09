@@ -1539,16 +1539,17 @@ End Sub
 #If TWINBASIC Then
 Private Sub Class_Terminate()
     #If Windows Then
-        'Collection
-        Mem.Common(0).saP.pvData = VarPtr(Mem) + ptrSize * 4
+        If Vars.DefInstance Is Nothing Then 'Global Instance
+            Mem.Common(0).saP.pvData = VarPtr(Mem.TextHash(0))
+            Mem.RPtr(0) = 0
+        End If
+        Mem.Common(0).saP.pvData = VarPtr(Mem.TextHash)
         Mem.RPtr(0) = 0
     #End If
-    'Lookup
-    Mem.Common(0).saP.pvData = VarPtr(Mem) + ptrSize
+    Mem.Common(0).saP.pvData = VarPtr(Mem.Look)
     Mem.RPtr(0) = 0
     '
-    'Common
-    Mem.Common(0).saP.pvData = VarPtr(Mem)
+    Mem.Common(0).saP.pvData = VarPtr(Mem.Common)
     Mem.RPtr(0) = 0
 End Sub
 #Else
