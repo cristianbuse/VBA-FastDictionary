@@ -171,7 +171,7 @@ Private Type ScrDictLayout 'Scripting.Dictionary memory layout
     firstItemPtr As LongPtr
     lastItemPtr As LongPtr
 #If x32 Then
-    Dummy As Long
+    dummy As Long
 #End If
     hashTablePtr As LongPtr
     hashModulo As Long
@@ -1070,6 +1070,7 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
     Static saH As SAFEARRAY_1D
     Static saPtrs(0 To 4) As LongPtr
     Dim temp As Object
+    Dim tempPtr As LongPtr
     '
     If Not Vars.DefInstance Is Nothing Then
         Vars.DefInstance.InitStructs v, m
@@ -1165,29 +1166,44 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
             Mem.RPtr(0) = VarPtr(h.sdl)
         End If
         '
+        'Increase stack frame size for 'NewEnum' and 'Class_Terminate' to avoid x64 bugs:
+        'https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes
+        'https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug
+        'https://github.com/cristianbuse/VBA-FastDictionary/issues/10
+        '
+        'More details about the below fix at:
+        'https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#x64-assembly
         #If x64 Then
-            'Increase stack frame size for 'NewEnum' to avoid For Each.. x64 bug
-            'https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes
-            h.saP.pvData = Vars.Dealloc.ThisPtr 'vtbl
-            h.saP.pvData = Mem.RPtr(0) + ptrSize * 7 'NewEnum address
-            h.saP.pvData = Mem.RPtr(0) + 21 'SUB R12, 0x10
+            Set temp = New Collection
             '
-            If (Mem.RPtr(0) And &HFFFF^) = &H8149^ Then
-                'SUB found. Replace 0x10 (16) with 0x800 (2048) bytes
-                Mem.RPtr(0) = Mem.RPtr(0) And &HFF00000000FFFFFF^ Or &H800000000^
-            End If
-'            '
-'            'Increase stack frame size for 'Class_Terminate' to avoid x64 bugs
-'            'https://github.com/cristianbuse/VBA-FastDictionary/issues/10
-'            'https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug
-'            h.saP.pvData = Vars.Dealloc.ThisPtr + LocalSize(Vars.Dealloc.ThisPtr) - ptrSize * 3 'IClassModuleEvt
-'            h.saP.pvData = Mem.RPtr(0) + ptrSize * 4 '_Terminate address
-'            h.saP.pvData = Mem.RPtr(0) + 21 'SUB R12, 0x08
-'            '
-'            If (Mem.RPtr(0) And &HFFFF^) = &H8149^ Then
-'                'SUB found. Replace 0x8 (8) with 0x80 (128) bytes
-'                Mem.RPtr(0) = Mem.RPtr(0) And &HFF00000000FFFFFF^ Or &H80000000^
-'            End If
+            'NewEnum address
+            h.saP.pvData = Vars.Dealloc.ThisPtr 'vtbl
+            h.saP.pvData = Mem.RPtr(0) + ptrSize * 7
+            temp.Add Mem.RPtr(0)
+            '
+            '_Terminate address
+            h.saP.pvData = Vars.Dealloc.ThisPtr + LocalSize(Vars.Dealloc.ThisPtr) - ptrSize * 3 'IClassModuleEvt
+            h.saP.pvData = Mem.RPtr(0) + ptrSize * 4 '_Terminate address
+            temp.Add Mem.RPtr(0)
+            '
+            For i = 1 To temp.Count
+                h.saP.pvData = temp(i) + &H15 'SUB R12, 0x08 / SUB R12, 0x10
+                If (Mem.RPtr(0) And &HFFFFFF^) = &HEC8149^ Then
+                    'The bytes following the function address are called via late-binding
+                    '   which in turn call the early-binding asm
+                    'SUB R12, 0x.. found. Replace 0x.. with 0x800 (2048) bytes
+                    Mem.RPtr(0) = Mem.RPtr(0) And &HFF00000000FFFFFF^ Or &H800000000^
+                    '
+                    'We also need to update the bytes in the early-binding asm
+                    h.saP.pvData = h.saP.pvData - 29 '-8 from func ptr
+                    h.saP.pvData = Mem.RPtr(0) + 8   'Address of early-binding asm
+                    h.saP.pvData = Mem.RPtr(0) + 8   'Asm size info
+                    '
+                    'Lower 2 bytes represent size of stack needed for args
+                    Mem.RPtr(0) = Mem.RPtr(0) And &HFFFFFFFFFFFF0000^ Or &H800^
+                End If
+            Next i
+            Set temp = Nothing
         #End If
 #End If
     End If
@@ -1212,7 +1228,6 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
     h.saP.pvData = v.Dealloc.ThisPtr + prevOffset
     '
     Dim prevPtr As LongPtr: prevPtr = Mem.RPtr(0)
-    Dim tempPtr As LongPtr
     '
     If prevPtr = nullPtr Then 'Can only be def instance
         h.lastInstancePtr = v.Dealloc.ThisPtr
