@@ -34,7 +34,9 @@ This Dictionary does not require any DLL references or any kind of external libr
 - [Additional functionality](#additional-functionality)
 - [OLE Automation](#ole-automation)
 - [x64 Assembly](#x64-assembly)
-  - [VBA x64 class method call mechanism](#vba-x64-class-method-call-mechanism)
+  - [VBA x64 class method call mechanism](#vba-class-method-call-mechanism)
+    - [Class virtual table](#vba-class-virtual-table)
+    - [Class method code](#vba-class-method-code)
 
 ***
 
@@ -709,10 +711,30 @@ This class implements fixes by overwriting x64 assembly bytes for the following 
 
 First, let's understand how x64 methods are called.
 
-### VBA x64 class method call mechanism
+### VBA class method call mechanism
 
-The first 8 bytes pointed by a class instance pointer hold the address of the class virtual table (derived from IDispatch). Let's see the assembly for a ```Function``` and a ```Sub``` on x64.
-In an empty project add a ```Class1``` with the following code:
+The first 8 bytes (4 bytes on x32) pointed by a class instance pointer hold the address of the class virtual table.
+
+#### Class virtual table
+
+Each VBA class is derived from [IDispatch](https://learn.microsoft.com/en-us/windows/win32/api/oaidl/nn-oaidl-idispatch) which in turn is derived from [IUnknown](https://learn.microsoft.com/en-us/windows/win32/api/unknwn/nn-unknwn-iunknown). In other words, the virtual table for a VBA class looks like this:
+```VBA
+IUnknown::QueryInterface     'Position 0
+IUnknown::AddRef
+IUnknown::Release
+IDispatch::GetTypeInfoCount
+IDispatch::GetTypeInfo
+IDispatch::GetIDsOfNames
+IDispatch::Invoke            'Position 6
+PublicMethod1                'Position 7
+...
+PublicMethodN
+PrivateMethod1
+...
+PrivateMethodN
+```
+
+We can read the pointer to the first function in a VBA class by using the following code. In an empty project add a ```Class1``` with the following code:
 ```VBA
 Option Explicit
 
@@ -726,7 +748,49 @@ Public Sub Test2()
     Next i
 End Sub
 ```
-Now add the following code in a standard .bas module and run the ```TestClassMethodASM``` method:
+
+Now add the following code in a standard .bas module and run the ```TestFuncPointer``` method. This will print the pointer for the ```Test``` method of ```Class1``` to the [Immediate](https://learn.microsoft.com/en-us/office/vba/language/reference/user-interface-help/immediate-window) window.
+```VBA
+Option Explicit
+
+#If Win64 Then
+    Const PTR_SIZE = 8
+#Else
+    Const PTR_SIZE = 4
+#End If
+Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
+Private Function MemLongPtr(ByVal addr As LongLong) As LongPtr
+    CopyMemory MemLongPtr, ByVal addr, PTR_SIZE
+End Function
+
+Sub TestFuncPointer()
+    Dim c As New Class1
+    Dim vTable As LongPtr
+    Dim testPtr As LongPtr
+    Dim b() As Byte
+    '
+    vTable = MemLongPtr(ObjPtr(c))
+    testPtr = MemLongPtr(vTable + PTR_SIZE * 7)
+    '
+    Debug.Print testPtr
+End Sub
+```
+
+For those familiar with [COM](https://en.wikipedia.org/wiki/Component_Object_Model), there will be a virtual table for each interface that a class implements.
+
+A class has many default interfaces (e.g. ```IMarshall```, ```IConnectionPointCointainer```, ```_DClass``` etc.) but ```IClassModuleEvt``` in particular is useful for finding the pointers for ```_Initialize``` and ```_Terminate```, which in turn call, if present, the ```Class_Initialize``` and ```Class_Terminate``` (more details on class footprint / layout can be found [here](https://codereview.stackexchange.com/questions/294682/faster-vb6-vba-class-deallocation)).
+
+In addition to the default interfaces, a class will have a virtual table for each implemented interface via the ```Implements``` keyword. It will also have an interface for each use of the ```WithEvents``` keyword.
+
+#### Class method code
+
+If we inspect the bytes pointed by the ```testPtr``` in the above example, it seems there are some assembly instructions. **These are not the actual method instructions**. After testing, it seems this is simply code that is being called via late-binding (e.g. when the method is called on a variable declared ```As Object```) - a call via ```IDispatch::Invoke```. It is not called at all via early-binding (e.g. when the method is called on a variable declared ```As Class1```).
+
+The following diagram shows how the bytes are organized:
+![methodCall](https://github.com/user-attachments/assets/642d7473-b555-4cc4-886f-f7908e446cf6)
+
+Let's see the assembly for a ```Function``` and a ```Sub``` on x64.
+Add the following code in a standard .bas module and run the ```TestClassMethodASM``` method:
 ```VBA
 Option Explicit
 #If Win64 Then
@@ -773,7 +837,7 @@ End Function
 ```
 The resulting hex can be translated to this:
 ```assembly
-; Typical assembly for a class Function
+; Typical assembly for a class Function with no arguments
 ;-------------------------------------------------------------------------------
 66490F6EEC             ; MOVQ XMM5,R12                    ; Saves R12 value in XMM5     
 48B8 987307FAFA7F0000  ; MOV RAX,00007FFAFA077398         ; Copies literal value into RAX - this value seems to always be the same
@@ -783,13 +847,13 @@ The resulting hex can be translated to this:
 498BC4                 ; MOV RAX,R12                      ; Saves R12 value into RAX - seems useless because RAX gets overwritten just below in the second last instruction
 49898C24 00000000      ; MOV QWORD PTR [R12+00000000],RCX ; Saves RCX value at the address pointed by R12
 49899424 08000000      ; MOV QWORD PTR [R12+00000008],RDX ; Saves RDX value at the address pointed by R12 + 0x8
-48BA F0D1254C0E020000  ; MOV RDX,0000020E4C25D1F0         ; Pushes literal value to RDX. The values is always the address of the function pointer less 84 bytes i.e. an offset from the MOVQ XMM5,R12  instruction above
-48B8 8A1800FAFA7F0000  ; MOV RAX,00007FFAFA00188A         ; Pushes literal value to RAX. This is jumped to in the next instruction and is the same value for all methods in the class i.e. a wrapper, most likely for errror handling
-FFE0                   ; JMP RAX                          ; Jumps to asm pointer by RAX as mentioned above. This wrapper will use the address passed in RDX to call the required asm for the methods
+48BA F0D1254C0E020000  ; MOV RDX,0000020E4C25D1F0         ; Pushes literal value to RDX. The value matches the value at -8 offset from function pointer
+48B8 8A1800FAFA7F0000  ; MOV RAX,00007FFAFA00188A         ; Pushes literal value to RAX. This is jumped to in the next instruction and is the same value for all methods in the class i.e. a wrapper
+FFE0                   ; JMP RAX                          ; Jumps to asm pointer by RAX as mentioned above. This wrapper will use the address passed in RDX to call the required method
 ; ...
 
 
-; Typical assembly for a class Sub
+; Typical assembly for a class Sub with no aruments
 ;-------------------------------------------------------------------------------
 66490F6EEC             ; MOVQ XMM5,R12                      
 48B8 987307FAFA7F0000  ; MOV RAX,00007FFAFA077398         
@@ -805,81 +869,9 @@ FFE0                   ; JMP RAX
 ; ...
 ```
 
-In other words, the asm code pointed by the entries in the class virtual table is calling wrapper code. All methods will call the same global method pointed by the ```RAX``` register which in turn will call the method pointed by the ```RDX``` register. 
+The asm code pointed by the entries in the class virtual table is only called via late-binding and in turn calls a wrapper code (pointed by the ```RAX``` register) that eventually calls the PCode (pointed by the ```RDX``` register).
 
-The ```RDX``` value seems to always be the function pointer address less 84 bytes e.g.```testPtr - 84```. If we investigate further, these 84 bytes container other pointers and after some testing it seems that the actual method asm is held at a 8 byte offset i.e. at -84 + 8 = -76 from the function pointer. This new location will also contain the exact size of the asm code.
+The ```RDX``` value always matches the value at function pointer address less 8 bytes e.g.```[testPtr - 8]```. For early-binded calls, this pointer at -8 offset is used to access the PCode directly.
 
-The following example replaces the assembly instructions for one method with the assembly instructions from another method. Call the ```TestSwap``` method:
-```VBA
-Option Explicit
-#If Win64 Then
-
-Const PTR_SIZE = 8
-
-Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
-Private Function MemLongPtr(ByVal addr As LongLong) As LongPtr
-    CopyMemory MemLongPtr, ByVal addr, PTR_SIZE
-End Function
-Private Function MemLong(ByVal addr As LongLong) As Long
-    CopyMemory MemLong, ByVal addr, 4
-End Function
-
-Sub TestSwap()
-    Dim c As New Class1
-    Dim vTable As LongPtr
-    Dim testPtr As LongPtr
-    Dim test2Ptr As LongPtr
-    Dim testAsmPtr As LongPtr
-    Dim test2AsmPtr As LongPtr
-    Dim asm2Size As Long
-    Dim b() As Byte
-    
-    vTable = MemLongPtr(ObjPtr(c))
-    testPtr = MemLongPtr(vTable + PTR_SIZE * 7)
-    test2Ptr = MemLongPtr(vTable + PTR_SIZE * 8)
-    '
-    testAsmPtr = MemLongPtr(testPtr - 76)
-    test2AsmPtr = MemLongPtr(test2Ptr - 76)
-    '
-    asm2Size = MemLong(test2AsmPtr + 12)
-    '
-    ReDim b(1 To asm2Size + 16) As Byte
-    '
-    'Store asm for Test method
-    CopyMemory b(1), ByVal testAsmPtr - asm2Size, UBound(b)
-    '
-    'Replace Test asm bytes with Test2 asm bytes. Comment this line to run the original Test asm bytes
-    CopyMemory ByVal testAsmPtr - asm2Size, ByVal test2AsmPtr - asm2Size, UBound(b)
-    '
-    'Call Test which actually runs the bytes we just copied
-    c.Test
-    '
-    'Restore Test asm bytes
-    CopyMemory ByVal testAsmPtr - asm2Size, b(1), UBound(b)
-    '
-    Debug.Print StringToHex(CStr(b))
-End Sub
-Public Function StringToHex(ByRef s As String) As String
-    Static map(0 To 255) As String
-    Dim b() As Byte: b = s
-    Dim i As Long
-
-    If LenB(map(0)) = 0 Then
-        For i = 0 To 255
-            map(i) = Right$("0" & Hex$(i), 2)
-        Next i
-    End If
-
-    StringToHex = Space$(LenB(s) * 2 + 2)
-    Mid$(StringToHex, 1, 2) = "0x"
-
-    For i = LBound(b) To UBound(b)
-        Mid$(StringToHex, (i + 1) * 2 + 1, 2) = map(b(i))
-    Next i
-End Function
-#End If
-```
-
-As seen in the above example, we can overwrite the original assembly instructions with the ones from another method.
 
 To be continued..
