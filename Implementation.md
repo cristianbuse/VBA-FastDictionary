@@ -35,8 +35,8 @@ This Dictionary does not require any DLL references or any kind of external libr
 - [OLE Automation](#ole-automation)
 - [x64 Assembly](#x64-assembly)
   - [VBA x64 class method call mechanism](#vba-class-method-call-mechanism)
-    - [Class virtual table](#vba-class-virtual-table)
-    - [Class method code](#vba-class-method-code)
+    - [Class virtual table](#class-virtual-table)
+    - [Class method code](#class-method-code)
 
 ***
 
