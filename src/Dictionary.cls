@@ -115,9 +115,9 @@ Const MaxLoadFactor As Single = 0.5
 #Const x32 = (x64 = 0) 'We don't care about x16
     
 #If x64 Then
-    Const nullPtr As LongLong = 0^
+    Const NullPtr As LongLong = 0^
 #Else
-    Const nullPtr As Long = 0&
+    Const NullPtr As Long = 0&
 #End If
 Private Enum InternalConstants 'Hides constants from Locals window
 #If x64 Then
@@ -304,7 +304,7 @@ Public Sub IEnumVARIANT_Next(ByVal celt As Long _
     Dim temp As LongPtr
     '
     CopyMemory temp, ByVal ptr, ptrSize
-    If temp = nullPtr Then Exit Sub
+    If temp = NullPtr Then Exit Sub
     '
     VariantCopy rgVar, temp
     #If x64 Then
@@ -1008,7 +1008,7 @@ Public Sub Remove(ByRef Key As Variant)
         #If x64 Then
             Vars.Keys(i + 1) = Empty 'Just to clear the pointer
         #Else
-            Vars.Keys(i).NextPtr = nullPtr
+            Vars.Keys(i).NextPtr = NullPtr
         #End If
     End If
     '
@@ -1224,7 +1224,7 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
     '
     Dim prevPtr As LongPtr: prevPtr = Mem.RPtr(0)
     '
-    If prevPtr = nullPtr Then 'Can only be def instance
+    If prevPtr = NullPtr Then 'Can only be def instance
         h.lastInstancePtr = v.Dealloc.ThisPtr
         h.saP.pvData = h.dPtr
         v.IsInitialized = True
@@ -1239,19 +1239,19 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
             If tempPtr Then Exit Do
             '
             h.saP.pvData = prevPtr + prevOffset
-            If Mem.RPtr(0) = nullPtr Then
+            If Mem.RPtr(0) = NullPtr Then
                 h.saP.pvData = prevPtr + h.nextPtrOffset
                 If Mem.RPtr(0) Then tempPtr = prevPtr
                 Exit Do
             End If
             prevPtr = Mem.RPtr(0)
         Loop
-        If (tempPtr <> nullPtr) And (tempPtr <> Vars.Dealloc.ThisPtr) Then
+        If (tempPtr <> NullPtr) And (tempPtr <> Vars.Dealloc.ThisPtr) Then
             'Link to the 'real' def instance
             h.saP.pvData = VarPtr(temp)
             Mem.RPtr(0) = tempPtr 'Unmanaged - ref count not increased
             Set Vars.DefInstance = temp
-            Mem.RPtr(0) = nullPtr 'Ref count not decreased
+            Mem.RPtr(0) = NullPtr 'Ref count not decreased
             '
             #If Windows Then
                 Set c = Nothing
@@ -1429,13 +1429,13 @@ Private Function DictEnum() As IUnknown
                     j = i * 3 + 5
                 End If
             Next i
-            Mem.RPtr(j) = nullPtr
+            Mem.RPtr(j) = NullPtr
         Else
             For i = 5 To .saP.rgsabound0.cElements - 4 Step 3
                 ptr = ptr + variantSize
                 Mem.RPtr(i) = ptr
             Next i
-            Mem.RPtr(i) = nullPtr
+            Mem.RPtr(i) = NullPtr
         End If
         .saP.rgsabound0.cElements = 1
         .saP.pvData = .dPtr
@@ -1455,13 +1455,13 @@ Private Function DictEnum() As IUnknown
                 j = i
             End If
         Next i
-        Vars.Keys(j).NextPtr = nullPtr
+        Vars.Keys(j).NextPtr = NullPtr
     Else
         ptr = ptr + enumVarSize
         For i = 0 To Vars.Count - 2
             Vars.Keys(i).NextPtr = ptr + enumVarSize * i
         Next i
-        Vars.Keys(i).NextPtr = nullPtr
+        Vars.Keys(i).NextPtr = NullPtr
     End If
 #End If
 End Function
@@ -1477,10 +1477,10 @@ Private Sub RemoveUnusedEnums(Optional ByVal searchPtr As LongPtr _
             #Else
                 .saP.pvData = ptr + nextItemOffset
             #End If
-            If Mem.RPtr(0) = nullPtr Then
+            If Mem.RPtr(0) = NullPtr Then
                 Vars.Enums.enumsColl.Remove CStr(ptr)
             ElseIf Mem.RPtr(0) = searchPtr Then
-                If replacePtr = nullPtr Then
+                If replacePtr = NullPtr Then
                     Vars.Enums.enumsColl.Remove CStr(ptr)
                 Else
                     Mem.RPtr(0) = replacePtr
@@ -1512,7 +1512,7 @@ Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
         .saP.rgsabound0.cElements = Vars.Count * 3
         If hasGaps Then
             For i = 5 To .saP.rgsabound0.cElements - 1 Step 3
-                If Mem.RPtr(i) <> nullPtr Then Mem.RPtr(i) = Mem.RPtr(i) + addrShift
+                If Mem.RPtr(i) <> NullPtr Then Mem.RPtr(i) = Mem.RPtr(i) + addrShift
             Next i
         Else
             For i = 5 To .saP.rgsabound0.cElements - 1 Step 3
@@ -1526,7 +1526,7 @@ Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
     If hasGaps Then
         For i = 0 To Vars.Count - 2
             With Vars.Keys(i)
-                If .NextPtr <> nullPtr Then .NextPtr = .NextPtr + addrShift
+                If .NextPtr <> NullPtr Then .NextPtr = .NextPtr + addrShift
             End With
         Next i
     Else
@@ -1548,16 +1548,16 @@ Private Sub Class_Terminate()
     #If Windows Then
         If Vars.DefInstance Is Nothing Then 'Global Instance
             Mem.Common(0).saP.pvData = VarPtr(Mem.TextHash(0))
-            Mem.RPtr(0) = nullPtr
+            Mem.RPtr(0) = NullPtr
         End If
         Mem.Common(0).saP.pvData = VarPtr(Mem.TextHash)
-        Mem.RPtr(0) = nullPtr
+        Mem.RPtr(0) = NullPtr
     #End If
     Mem.Common(0).saP.pvData = VarPtr(Mem.Look)
-    Mem.RPtr(0) = nullPtr
+    Mem.RPtr(0) = NullPtr
     '
     Mem.Common(0).saP.pvData = VarPtr(Mem.Common)
-    Mem.RPtr(0) = nullPtr
+    Mem.RPtr(0) = NullPtr
 End Sub
 #Else
 'Postpones termination to a later stage where we have full control over how VBA
@@ -1618,7 +1618,7 @@ Friend Sub DelayTermination(ByRef dictToDelay As Dictionary _
             lastDictPtr = .lastInstancePtr
         End If
         '
-        If .lastTerminatedPtr = nullPtr Then
+        If .lastTerminatedPtr = NullPtr Then
             .lastTerminatedPtr = Vars.Dealloc.ThisPtr 'Use Def instance
         End If
         '
@@ -1642,7 +1642,7 @@ Friend Sub DelayTermination(ByRef dictToDelay As Dictionary _
             followPtr = Mem.RPtr(0)
             Mem.RPtr(0) = tempPtr
             '
-            If prevPtr <> nullPtr Then 'Not first ever instance
+            If prevPtr <> NullPtr Then 'Not first ever instance
                 .saP.pvData = prevPtr + .nextPtrOffset
                 Mem.RPtr(0) = followPtr
             End If
