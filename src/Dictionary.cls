@@ -114,6 +114,11 @@ Const MaxLoadFactor As Single = 0.5
 #Const x64 = Win64
 #Const x32 = (x64 = 0) 'We don't care about x16
     
+#If x64 Then
+    Const nullPtr As LongLong = 0^
+#Else
+    Const nullPtr As Long = 0&
+#End If
 Private Enum InternalConstants 'Hides constants from Locals window
 #If x64 Then
     isItemObjBit = &H80000000
@@ -299,7 +304,7 @@ Public Sub IEnumVARIANT_Next(ByVal celt As Long _
     Dim temp As LongPtr
     '
     CopyMemory temp, ByVal ptr, ptrSize
-    If temp = 0 Then Exit Sub
+    If temp = nullPtr Then Exit Sub
     '
     VariantCopy rgVar, temp
     #If x64 Then
@@ -1003,7 +1008,7 @@ Public Sub Remove(ByRef Key As Variant)
         #If x64 Then
             Vars.Keys(i + 1) = Empty 'Just to clear the pointer
         #Else
-            Vars.Keys(i).NextPtr = 0&
+            Vars.Keys(i).NextPtr = nullPtr
         #End If
     End If
     '
@@ -1090,11 +1095,6 @@ End Sub
 '   early binding speed
 Friend Sub InitStructs(ByRef v As DictionaryVariables _
                      , ByRef m As MemoryAccessors)
-    #If x64 Then
-        Const nullPtr As LongLong = 0^
-    #Else
-        Const nullPtr As Long = 0&
-    #End If
     Static l As Lookups
     Static h As Globals
     Static saL As SAFEARRAY_1D
@@ -1196,45 +1196,8 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
             h.saP.pvData = VarPtr(c)
             Mem.RPtr(0) = VarPtr(h.sdl)
         End If
-        '
-        'Increase stack frame size for 'NewEnum' and 'Class_Terminate' to avoid x64 bugs:
-        'https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes
-        'https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug
-        'https://github.com/cristianbuse/VBA-FastDictionary/issues/10
-        '
-        'More details about the below fix at:
-        'https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#x64-assembly
         #If x64 And (TWINBASIC = 0) Then
-            Set temp = New Collection
-            '
-            'NewEnum address
-            h.saP.pvData = Vars.Dealloc.ThisPtr 'vtbl
-            h.saP.pvData = Mem.RPtr(0) + ptrSize * 7
-            temp.Add Mem.RPtr(0)
-            '
-            '_Terminate address
-            h.saP.pvData = Vars.Dealloc.ThisPtr + LocalSize(Vars.Dealloc.ThisPtr) - ptrSize * 3 'IClassModuleEvt
-            h.saP.pvData = Mem.RPtr(0) + ptrSize * 4 '_Terminate address
-            temp.Add Mem.RPtr(0)
-            '
-            For i = 1 To temp.Count
-                h.saP.pvData = temp(i) + &H15 'SUB R12, 0x08 / SUB R12, 0x10
-                If (Mem.RPtr(0) And &HFFFFFF^) = &HEC8149^ Then
-                    'The bytes following the function address are called via late-binding
-                    '   which in turn call the early-binding asm
-                    'SUB R12, 0x.. found. Replace 0x.. with 0x800 (2048) bytes
-                    Mem.RPtr(0) = Mem.RPtr(0) And &HFF00000000FFFFFF^ Or &H800000000^
-                    '
-                    'We also need to update the bytes in the early-binding asm
-                    h.saP.pvData = h.saP.pvData - 29 '-8 from func ptr
-                    h.saP.pvData = Mem.RPtr(0) + 8   'Address of early-binding asm
-                    h.saP.pvData = Mem.RPtr(0) + 8   'Asm size info
-                    '
-                    'Lower 2 bytes represent size of stack needed for args
-                    Mem.RPtr(0) = Mem.RPtr(0) And &HFFFFFFFFFFFF0000^ Or &H800^
-                End If
-            Next i
-            Set temp = Nothing
+            FixStackBugs h
         #End If
 #End If
     End If
@@ -1343,6 +1306,55 @@ Private Function SetTrue(ByRef b As Boolean) As Boolean
     b = True
     SetTrue = True
 End Function
+
+#If Windows And x64 And (TWINBASIC = 0) Then
+'Increase stack frame size for 'NewEnum' and 'Class_Terminate' to avoid x64 bugs:
+'https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes
+'https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug
+'https://github.com/cristianbuse/VBA-FastDictionary/issues/10
+'
+'More details about the below fix at:
+'https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#x64-assembly
+Private Sub FixStackBugs(ByRef h As Globals)
+    Const opNumNewEnum As Long = 7   'Dictionary interface derived from IDispatch
+    Const opNumTerminate As Long = 4 'IClassModuleEvt interface derived from IUnknown
+    Dim newEnumPtr As LongPtr
+    Dim terminatePtr As LongPtr
+    '
+    'NewEnum
+    h.saP.pvData = Vars.Dealloc.ThisPtr 'Dictionary
+    h.saP.pvData = Mem.RPtr(0) + ptrSize * opNumNewEnum
+    newEnumPtr = Mem.RPtr(0)
+    '
+    '_Terminate address
+    h.saP.pvData = Vars.Dealloc.ThisPtr + LocalSize(Vars.Dealloc.ThisPtr) - ptrSize * 3 'IClassModuleEvt
+    h.saP.pvData = Mem.RPtr(0) + ptrSize * opNumTerminate
+    terminatePtr = Mem.RPtr(0)
+    '
+    FixStackSize h, newEnumPtr, &H800  'From 16 to 2048 bytes
+    FixStackSize h, terminatePtr, &H18 'From 8 to 24 bytes
+End Sub
+Private Sub FixStackSize(ByRef h As Globals _
+                       , ByVal funcPtr As LongPtr _
+                       , ByVal newSize As Integer)
+    Dim newSizePtr As LongPtr: newSizePtr = CLngPtr(newSize)
+    'The bytes following the function address are called via IDispatch::Invoke
+    '   which in turn call the early-binding PCode via a global asm wrapper
+    h.saP.pvData = funcPtr + &H15 'SUB R12, 0x08 / SUB R12, 0x10
+    If (Mem.RPtr(0) And &HFFFFFF^) = &HEC8149^ Then
+        h.saP.pvData = h.saP.pvData + 3
+        Mem.RPtr(0) = Mem.RPtr(0) And &HFFFFFFFFFFFF0000^ Or newSizePtr
+        '
+        'We also need to update the stack frame size for args in PCode
+        h.saP.pvData = funcPtr - 8
+        h.saP.pvData = Mem.RPtr(0) + 8 'Address of PCode
+        h.saP.pvData = Mem.RPtr(0) + 8 'Size info
+        '
+        'Lower 2 bytes represent size of stack needed for args
+        Mem.RPtr(0) = Mem.RPtr(0) And &HFFFFFFFFFFFF0000^ Or newSizePtr
+    End If
+End Sub
+#End If
     
 Public Function Factory() As Dictionary
     Set Factory = New Dictionary
@@ -1417,13 +1429,13 @@ Private Function DictEnum() As IUnknown
                     j = i * 3 + 5
                 End If
             Next i
-            Mem.RPtr(j) = 0^
+            Mem.RPtr(j) = nullPtr
         Else
             For i = 5 To .saP.rgsabound0.cElements - 4 Step 3
                 ptr = ptr + variantSize
                 Mem.RPtr(i) = ptr
             Next i
-            Mem.RPtr(i) = 0^
+            Mem.RPtr(i) = nullPtr
         End If
         .saP.rgsabound0.cElements = 1
         .saP.pvData = .dPtr
@@ -1443,24 +1455,19 @@ Private Function DictEnum() As IUnknown
                 j = i
             End If
         Next i
-        Vars.Keys(j).NextPtr = 0&
+        Vars.Keys(j).NextPtr = nullPtr
     Else
         ptr = ptr + enumVarSize
         For i = 0 To Vars.Count - 2
             Vars.Keys(i).NextPtr = ptr + enumVarSize * i
         Next i
-        Vars.Keys(i).NextPtr = 0&
+        Vars.Keys(i).NextPtr = nullPtr
     End If
 #End If
 End Function
 
 Private Sub RemoveUnusedEnums(Optional ByVal searchPtr As LongPtr _
                             , Optional ByVal replacePtr As LongPtr)
-    #If x64 Then
-        Const nullPtr As LongLong = 0^
-    #Else
-        Const nullPtr As Long = 0&
-    #End If
     Dim e As Variant 'IEnumVARIANT does not work with For Each
     With Mem.Common(0)
         For Each e In Vars.Enums.enumsColl
@@ -1505,7 +1512,7 @@ Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
         .saP.rgsabound0.cElements = Vars.Count * 3
         If hasGaps Then
             For i = 5 To .saP.rgsabound0.cElements - 1 Step 3
-                If Mem.RPtr(i) <> 0^ Then Mem.RPtr(i) = Mem.RPtr(i) + addrShift
+                If Mem.RPtr(i) <> nullPtr Then Mem.RPtr(i) = Mem.RPtr(i) + addrShift
             Next i
         Else
             For i = 5 To .saP.rgsabound0.cElements - 1 Step 3
@@ -1519,7 +1526,7 @@ Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
     If hasGaps Then
         For i = 0 To Vars.Count - 2
             With Vars.Keys(i)
-                If .NextPtr <> 0& Then .NextPtr = .NextPtr + addrShift
+                If .NextPtr <> nullPtr Then .NextPtr = .NextPtr + addrShift
             End With
         Next i
     Else
@@ -1541,16 +1548,16 @@ Private Sub Class_Terminate()
     #If Windows Then
         If Vars.DefInstance Is Nothing Then 'Global Instance
             Mem.Common(0).saP.pvData = VarPtr(Mem.TextHash(0))
-            Mem.RPtr(0) = 0
+            Mem.RPtr(0) = nullPtr
         End If
         Mem.Common(0).saP.pvData = VarPtr(Mem.TextHash)
-        Mem.RPtr(0) = 0
+        Mem.RPtr(0) = nullPtr
     #End If
     Mem.Common(0).saP.pvData = VarPtr(Mem.Look)
-    Mem.RPtr(0) = 0
+    Mem.RPtr(0) = nullPtr
     '
     Mem.Common(0).saP.pvData = VarPtr(Mem.Common)
-    Mem.RPtr(0) = 0
+    Mem.RPtr(0) = nullPtr
 End Sub
 #Else
 'Postpones termination to a later stage where we have full control over how VBA
@@ -1578,11 +1585,6 @@ End Sub
 '   the whole termination process linear - O(n)
 Friend Sub DelayTermination(ByRef dictToDelay As Dictionary _
                           , ByRef v As DictionaryVariables)
-    #If x64 Then
-        Const nullPtr As LongLong = 0^
-    #Else
-        Const nullPtr As Long = 0&
-    #End If
     Static pendingDict As Dictionary
     Static pendingPtr As LongPtr
     Static lastDict As Dictionary
