@@ -80,6 +80,8 @@ Attribute VB_Exposed = False
 ''         - Allows a Key value to be changed while preserving the Item
 ''    * LoadFactor <Get>
 ''         - Returns the current % load for the hash map containing indexes
+''    * AllowDuplicateKeys <Get/Let>
+''         - Can only be changed if there are no stored items
 ''==============================================================================
 
 '@PredeclaredId
@@ -280,6 +282,7 @@ Private Type DictionaryVariables
     Count As Long
     UBound As Long
     UsedCount As Long
+    AllowDuplicateKeys As Boolean
     DefInstance As Dictionary 'Avoids deallocation of default (Predeclared) dict
     Dealloc As DeallocVars
     IsInitialized As Boolean
@@ -349,8 +352,12 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
     Dim i As Long
     Dim controlByte As Long
     '
-    i = GetIndex(Key, hVal, groupSlot, controlByte)
-    If i > notFound Then Err.Raise 457, TypeName(Me) & ".Add"
+    If Vars.AllowDuplicateKeys Then
+        GetIndex Key, hVal, groupSlot, controlByte, True
+    Else
+        i = GetIndex(Key, hVal, groupSlot, controlByte)
+        If i > notFound Then Err.Raise 457, TypeName(Me) & ".Add"
+    End If
     '
     If Vars.Count > Vars.UBound Then
         Vars.UBound = Vars.UBound * 2 + 1
@@ -605,11 +612,11 @@ Private Function GetIndex(ByRef Key As Variant _
     Else
         hVal = vt 'vbEmpty (0) or vbNull (1)
     End If
-    If hashOnly Then Exit Function
     '
     'Calculate sub-hashes
     groupSlot = hVal Mod Vars.Hash.GroupCount
     controlByte = (hVal And Vars.Hash.ControlMask) \ Vars.Hash.GroupCount
+    If hashOnly Then Exit Function
     '
     #If x64 Then
         Const signBit As LongLong = &H8000000000000000^
@@ -703,6 +710,16 @@ Public Property Let CompareMode(ByVal compMode As VbCompareMethod)
         Vars.LocaleID = Mem.Common(0).lcid
     End If
 #End If
+End Property
+
+Public Property Get AllowDuplicateKeys() As Boolean
+    AllowDuplicateKeys = Vars.AllowDuplicateKeys
+End Property
+Public Property Let AllowDuplicateKeys(ByVal newValue As Boolean)
+    If Vars.UsedCount > 0 And (Vars.AllowDuplicateKeys Xor newValue) Then
+        Err.Raise 5, TypeName(Me) & ".AllowDuplicateKeys", "Dict already contains data"
+    End If
+    Vars.AllowDuplicateKeys = newValue
 End Property
 
 Public Property Get Count() As Long

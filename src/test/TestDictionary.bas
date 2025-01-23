@@ -17,6 +17,7 @@ Private Const duplicatedKeyErr As Long = 457
 Public Sub RunAllDictionaryTests()
     TestEmptyDictionary
     TestDictionaryAdd
+    TestDictionaryAllowDuplicateKeys
     TestDictionaryCompare
     TestDictionaryCount
     TestDictionaryExists
@@ -83,6 +84,32 @@ End Sub
 Private Function GetDefaultInterface(ByVal obj As stdole.IUnknown) As Object
     Set GetDefaultInterface = obj
 End Function
+
+Private Sub TestDictionaryAllowDuplicateKeys()
+    Dim d As New Dictionary
+    d.AllowDuplicateKeys = True
+    '
+    d.Add 1, 2
+    d.Add 1, 3
+    '
+    Debug.Assert d(1) = 2
+    Debug.Assert d.Count = 2
+    Debug.Assert d.Items()(0) = 2
+    Debug.Assert d.Items()(1) = 3
+    '
+    d.Remove 1
+    Debug.Assert d(1) = 3
+    '
+    d.Add 1, 4
+    Debug.Assert d(1) = 3
+    Debug.Assert d.Count = 2
+    Debug.Assert d.Items()(0) = 3
+    Debug.Assert d.Items()(1) = 4
+    '
+    d.Key(1) = 2
+    Debug.Assert d(1) = 4
+    Debug.Assert d(2) = 3
+End Sub
 
 Private Sub TestDictionaryCompare()
     Dim d As New Dictionary
