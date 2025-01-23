@@ -218,7 +218,14 @@ Private Type Globals
     lastTerminatedNextPtr As LongPtr
     nextPtrOffset As LongPtr
     defPtrOffset As LongPtr
+    nestingLevel As Long
+    hasNestedPending As Boolean
 End Type
+
+Private Enum DeepNestAction
+    delayNestedTermination
+    clearNestedDelayed
+End Enum
 
 Private Type Lookups
     ByteShiftL(0 To groupSize - 1) As LongPtr
@@ -1563,17 +1570,67 @@ End Sub
 'Postpones termination to a later stage where we have full control over how VBA
 '   traverses the linked list of all dictionary instances
 Private Sub Class_Terminate()
-    'Deallocate enumerators just in case they are pointing to Keys
-    Set Vars.Enums.emptyColl = Nothing
-    Set Vars.Enums.enumsColl = Nothing
+    With Mem.Common(0)
+        .nestingLevel = .nestingLevel + 1
+        '
+        'Deallocate enumerators just in case they are pointing to Keys
+        Set Vars.Enums.emptyColl = Nothing
+        Set Vars.Enums.enumsColl = Nothing
+        '
+        'Avoid 'Out of stack space' caused by too many nested _Terminate calls
+        Const maxNestingBeforeDelay As Long = 256
+        If .nestingLevel > maxNestingBeforeDelay Then
+            Vars.DefInstance.ManageDeepNested Vars, delayNestedTermination
+        End If
+        '
+        'Nested Dictionaries must be terminated before we deallocate
+        Erase Vars.Keys
+        Erase Vars.Items
+        '
+        If .nestingLevel = 1 Then 'Clean-up for deeply nested
+            Do While .hasNestedPending
+                Vars.DefInstance.ManageDeepNested Vars, clearNestedDelayed
+            Loop
+        End If
+        '
+        'Cache this instance inside the global instance and destroy later
+        Vars.DefInstance.DelayTermination Me, Vars
+        Set Vars.DefInstance = Nothing
+        .nestingLevel = .nestingLevel - 1
+    End With
+End Sub
+
+Friend Sub ManageDeepNested(ByRef v As DictionaryVariables _
+                          , ByVal dnAction As DeepNestAction)
+    Static dicts As New Collection
+    Dim i As Long
     '
-    'Nested Dictionaries must be terminated before we deallocate this instance
-    Erase Vars.Keys
-    Erase Vars.Items
-    '
-    'Cache this instance inside the global instance and destroy later
-    Vars.DefInstance.DelayTermination Me, Vars
-    Set Vars.DefInstance = Nothing
+    If dnAction = clearNestedDelayed Then
+        For i = 1 To dicts.Count 'We don't go beyond current count
+            dicts.Remove 1       'This line can increase count indirectly if max
+        Next i                   ' nesting level is reached again via _Terminate
+    Else
+        For i = 0 To v.Count - 1
+        #If x64 Then
+            If v.Meta(i) And hmObject Then
+                If TypeOf v.Keys(i) Is Dictionary Then dicts.Add v.Keys(i)
+            End If
+            If v.Meta(i) And isItemObjBit Then
+                If TypeOf v.Items(i) Is Dictionary Then dicts.Add v.Items(i)
+            End If
+        #Else
+            If v.Keys(i).IsKeyObj Then
+                If TypeOf v.Keys(i).Value Is Dictionary Then
+                    dicts.Add v.Keys(i).Value
+                End If
+            End If
+            If v.Keys(i).IsItemObj Then
+                If TypeOf v.Items(i) Is Dictionary Then dicts.Add v.Items(i)
+            End If
+        #End If
+        Next i
+    End If
+    Mem.Common(0).hasNestedPending = (dicts.Count > 0)
 End Sub
 
 'When VB* terminates a class instance, it traverses all instances starting from
@@ -1675,4 +1732,10 @@ Friend Sub DelayTermination(ByRef dictToDelay As Dictionary _
         pendingPtr = v.Dealloc.ThisPtr
     End With
 End Sub
+#End If
+
+#If DEBUG_MODE Then
+Public Property Get LastCreatedInstancePtr() As LongPtr
+    LastCreatedInstancePtr = Mem.Common(0).lastInstancePtr
+End Property
 #End If
