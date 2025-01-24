@@ -48,10 +48,14 @@ Attribute VB_Exposed = False
 ''         - Checks if a specified Key exists
 ''    * Factory
 ''         - Returns a new Dictionary instance
+''    * Index
+''         - Returns the index for a specified Key
 ''    * Items
 ''         - Returns a 1D array of all the Items
 ''    * Keys
 ''         - Returns a 1D array of all the Keys
+''    * KeysItems2D
+''         - Returns a 2D array of all the Keys and Items
 ''    * PredictCount
 ''         - If the number of Key-Item pairs is known before adding or a good
 ''           guess is possible then a call to 'PredictCount' with the expected
@@ -76,10 +80,16 @@ Attribute VB_Exposed = False
 ''         - Changes the value of an Item identified by the specified Key
 ''         - Default Member. d.Item(Key) = n can be called as d(Key) = n
 ''         - If Key does not exist then the pair is added via 'Add'
+''    * ItemAtIndex <Get><Let><Set>
+''         - Returns or replaces the Item at the specified index
 ''    * Key <Let>
 ''         - Allows a Key value to be changed while preserving the Item
+''    * KeyAtIndex
+''         - Returns the Key at the specified index
 ''    * LoadFactor <Get>
 ''         - Returns the current % load for the hash map containing indexes
+''    * AllowDuplicateKeys <Get/Let>
+''         - Can only be changed if there are no stored items
 ''==============================================================================
 
 '@PredeclaredId
@@ -218,7 +228,14 @@ Private Type Globals
     lastTerminatedNextPtr As LongPtr
     nextPtrOffset As LongPtr
     defPtrOffset As LongPtr
+    nestingLevel As Long
+    hasNestedPending As Boolean
 End Type
+
+Private Enum DeepNestAction
+    delayNestedTermination
+    clearNestedDelayed
+End Enum
 
 Private Type Lookups
     ByteShiftL(0 To groupSize - 1) As LongPtr
@@ -273,6 +290,7 @@ Private Type DictionaryVariables
     Count As Long
     UBound As Long
     UsedCount As Long
+    AllowDuplicateKeys As Boolean
     DefInstance As Dictionary 'Avoids deallocation of default (Predeclared) dict
     Dealloc As DeallocVars
     IsInitialized As Boolean
@@ -342,8 +360,12 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
     Dim i As Long
     Dim controlByte As Long
     '
-    i = GetIndex(Key, hVal, groupSlot, controlByte)
-    If i > notFound Then Err.Raise 457, TypeName(Me) & ".Add"
+    If Vars.AllowDuplicateKeys Then
+        GetIndex Key, hVal, groupSlot, controlByte, True
+    Else
+        i = GetIndex(Key, hVal, groupSlot, controlByte)
+        If i > notFound Then Err.Raise 457, TypeName(Me) & ".Add"
+    End If
     '
     If Vars.Count > Vars.UBound Then
         Vars.UBound = Vars.UBound * 2 + 1
@@ -598,11 +620,11 @@ Private Function GetIndex(ByRef Key As Variant _
     Else
         hVal = vt 'vbEmpty (0) or vbNull (1)
     End If
-    If hashOnly Then Exit Function
     '
     'Calculate sub-hashes
     groupSlot = hVal Mod Vars.Hash.GroupCount
     controlByte = (hVal And Vars.Hash.ControlMask) \ Vars.Hash.GroupCount
+    If hashOnly Then Exit Function
     '
     #If x64 Then
         Const signBit As LongLong = &H8000000000000000^
@@ -684,7 +706,7 @@ Public Property Let CompareMode(ByVal compMode As VbCompareMethod)
     Const maxMode As Long = 31890 'Same as StrComp limits
     '
     If Vars.UsedCount > 0 And compMode <> Vars.Compare Then
-        Err.Raise 5, TypeName(Me) & ".CompareMode", "Dict already contains data"
+        Err.Raise 5, TypeName(Me) & ".CompareMode", "Dict contains data"
     ElseIf compMode < minMode Or compMode > maxMode Then
         Err.Raise 5, TypeName(Me) & ".CompareMode", "Invalid compare method"
     End If
@@ -698,12 +720,57 @@ Public Property Let CompareMode(ByVal compMode As VbCompareMethod)
 #End If
 End Property
 
+'Can only be changed if there are no stored items
+Public Property Get AllowDuplicateKeys() As Boolean
+    AllowDuplicateKeys = Vars.AllowDuplicateKeys
+End Property
+Public Property Let AllowDuplicateKeys(ByVal newValue As Boolean)
+    If Vars.UsedCount > 0 And (Vars.AllowDuplicateKeys Xor newValue) Then
+        Err.Raise 5, TypeName(Me) & ".AllowDuplicateKeys", "Dict contains data"
+    End If
+    Vars.AllowDuplicateKeys = newValue
+End Property
+
 Public Property Get Count() As Long
     Count = Vars.UsedCount
 End Property
 
 Public Function Exists(ByRef Key As Variant) As Boolean
     Exists = (GetIndex(Key) > notFound)
+End Function
+
+Public Function Index(ByRef Key As Variant) As Long
+    Dim i As Long: i = GetIndex(Key)
+    If i = notFound Then Err.Raise 9
+    '
+    If Vars.UsedCount < Vars.Count Then
+        Index = i - CountRemoved(i)
+    Else
+        Index = i
+    End If
+End Function
+Private Function CountRemoved(ByVal upTo As Long) As Long
+    Dim i As Long
+    Dim startIndex As Long
+    Dim endIndex As Long
+    Dim isFirstHalf As Boolean: isFirstHalf = (upTo < Vars.Count \ 2)
+    '
+    If isFirstHalf Then
+        endIndex = upTo - 1
+    Else
+        startIndex = upTo + 1
+        endIndex = Vars.Count
+    End If
+    For i = startIndex To endIndex
+        #If x64 Then
+            If Vars.Meta(i) = hmRemoved Then CountRemoved = CountRemoved + 1
+        #Else
+            If Vars.Keys(i).Meta = hmRemoved Then CountRemoved = CountRemoved + 1
+        #End If
+    Next i
+    If Not isFirstHalf Then
+        CountRemoved = Vars.Count - Vars.UsedCount - CountRemoved
+    End If
 End Function
 
 'Raises Error:
@@ -760,6 +827,61 @@ Public Property Set Item(ByRef Key As Variant, ByRef Item As Object)
         Add Key, Item
     End If
 End Property
+
+'Raises Error:
+'   -    9: invalid index
+'   -  450: 'Set' is missing when assigning an object
+Public Property Get ItemAtIndex(ByVal i As Long) As Variant
+    If i < 0 Or i >= Vars.UsedCount Then Err.Raise 9
+    If Vars.UsedCount < Vars.Count Then i = FindIndex(i)
+    '
+#If x64 Then
+    If Vars.Meta(i) And isItemObjBit Then
+#Else
+    If Vars.Keys(i).IsItemObj Then
+#End If
+        Set ItemAtIndex = Vars.Items(i)
+    Else
+        ItemAtIndex = Vars.Items(i)
+    End If
+End Property
+Public Property Let ItemAtIndex(ByVal i As Long, ByRef Item As Variant)
+    If i < 0 Or i >= Vars.UsedCount Then Err.Raise 9
+    If IsObject(Item) Or (VarType(Item) = vbDataObject) Then
+        Err.Raise 450, TypeName(Me) & ".ItemAtIndex", "'Set' is required"
+    End If
+    '
+    If Vars.UsedCount < Vars.Count Then i = FindIndex(i)
+    #If x64 Then
+        Vars.Meta(i) = Vars.Meta(i) And keyBitMask
+    #Else
+        Vars.Keys(i).IsItemObj = False
+    #End If
+    Vars.Items(i) = Item
+End Property
+Public Property Set ItemAtIndex(ByVal i As Long, ByRef Item As Object)
+    If i < 0 Or i >= Vars.UsedCount Then Err.Raise 9
+    If Vars.UsedCount < Vars.Count Then i = FindIndex(i)
+    '
+    #If x64 Then
+        Vars.Meta(i) = Vars.Meta(i) Or isItemObjBit
+    #Else
+        Vars.Keys(i).IsItemObj = True
+    #End If
+    Set Vars.Items(i) = Item
+End Property
+Private Function FindIndex(ByVal i As Long) As Long
+    Dim j As Long
+    For j = 0 To Vars.Count - 1
+        #If x64 Then
+            If Vars.Meta(j) <> hmRemoved Then i = i - 1
+        #Else
+            If Vars.Keys(j).Meta <> hmRemoved Then i = i - 1
+        #End If
+        If i < 0 Then Exit For
+    Next j
+    FindIndex = j
+End Function
 
 Public Property Get Items() As Variant()
     If Vars.UsedCount = 0 Then
@@ -872,6 +994,27 @@ Private Sub ClearMapIndex(ByRef groupSlot As Long, ByRef posInGroup As Long)
     End With
 End Sub
 
+'Raises Error:
+'   -    9: invalid index
+Public Property Get KeyAtIndex(ByVal i As Long) As Variant
+    If i < 0 Or i >= Vars.UsedCount Then Err.Raise 9
+    If Vars.UsedCount < Vars.Count Then i = FindIndex(i)
+    '
+#If x64 Then
+    If Vars.Meta(i) And hmObject Then
+        Set KeyAtIndex = Vars.Keys(i)
+    Else
+        KeyAtIndex = Vars.Keys(i)
+    End If
+#Else
+    If Vars.Keys(i).IsKeyObj Then
+        Set KeyAtIndex = Vars.Keys(i).Value
+    Else
+        KeyAtIndex = Vars.Keys(i).Value
+    End If
+#End If
+End Property
+
 Public Property Get Keys() As Variant()
     If Vars.UsedCount = 0 Then
         Keys = Array()
@@ -912,6 +1055,53 @@ Public Property Get Keys() As Variant()
     Next i
     Keys = res
 #End If
+End Property
+
+Public Property Get KeysItems2D() As Variant()
+    If Vars.UsedCount = 0 Then
+        Dim v As Variant
+        ReDim v(0 To 0, 0 To 0) As Variant
+        '
+        With Mem.Common(0)
+            .saP.pvData = VarPtr(v) + 8
+            .saP.pvData = Mem.RPtr(0) + 16 + ptrSize * 2
+            Mem.RPtr(0) = 0
+            .saP.pvData = .dPtr
+        End With
+        '
+        KeysItems2D = v
+        Exit Property
+    End If
+    '
+    Dim res() As Variant
+    Dim i As Long
+    Dim j As Long
+    '
+    With Vars
+        ReDim res(0 To .UsedCount - 1, 0 To 1)
+        For i = 0 To .Count - 1
+            #If x64 Then
+                If .Meta(i) <> hmRemoved Then
+                    If .Meta(i) And hmObject Then Set res(j, 0) = .Keys(i) _
+                                             Else res(j, 0) = .Keys(i)
+                    If .Meta(i) And isItemObjBit Then Set res(j, 1) = .Items(i) _
+                                                 Else res(j, 1) = .Items(i)
+                    j = j + 1
+                End If
+            #Else
+                With .Keys(i)
+                    If .Meta <> hmRemoved Then
+                        If .IsKeyObj Then Set res(j, 0) = .Value _
+                                     Else res(j, 0) = .Value
+                        If .IsItemObj Then Set res(j, 1) = Vars.Items(i) _
+                                      Else res(j, 1) = Vars.Items(i)
+                        j = j + 1
+                    End If
+                End With
+            #End If
+        Next i
+        KeysItems2D = res
+    End With
 End Property
 
 Public Sub PredictCount(ByVal expectedCount As Long)
@@ -1308,7 +1498,7 @@ Private Function SetTrue(ByRef b As Boolean) As Boolean
 End Function
 
 #If Windows And x64 And (TWINBASIC = 0) Then
-'Increase stack frame size for 'NewEnum' and 'Class_Terminate' to avoid x64 bugs:
+'Increase stack frame size for 'NewEnum' & 'Class_Terminate' to avoid x64 bugs:
 'https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes
 'https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug
 'https://github.com/cristianbuse/VBA-FastDictionary/issues/10
@@ -1316,8 +1506,8 @@ End Function
 'More details about the below fix at:
 'https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#x64-assembly
 Private Sub FixStackBugs(ByRef h As Globals)
-    Const opNumNewEnum As Long = 7   'Dictionary interface derived from IDispatch
-    Const opNumTerminate As Long = 4 'IClassModuleEvt interface derived from IUnknown
+    Const opNumNewEnum As Long = 7   'Dict interface derived from IDispatch
+    Const opNumTerminate As Long = 4 'IClassModuleEvt derived from IUnknown
     Dim newEnumPtr As LongPtr
     Dim terminatePtr As LongPtr
     '
@@ -1327,7 +1517,8 @@ Private Sub FixStackBugs(ByRef h As Globals)
     newEnumPtr = Mem.RPtr(0)
     '
     '_Terminate address
-    h.saP.pvData = Vars.Dealloc.ThisPtr + LocalSize(Vars.Dealloc.ThisPtr) - ptrSize * 3 'IClassModuleEvt
+    h.saP.pvData = Vars.Dealloc.ThisPtr + LocalSize(Vars.Dealloc.ThisPtr) _
+                                        - ptrSize * 3 'IClassModuleEvt
     h.saP.pvData = Mem.RPtr(0) + ptrSize * opNumTerminate
     terminatePtr = Mem.RPtr(0)
     '
@@ -1367,7 +1558,7 @@ End Property
 Private Function DictEnum() As IUnknown
     Dim hadEnum As Boolean
     '
-    If Not Vars.IsInitialized Then Exit Function 'In case called from IDE before Init
+    If Not Vars.IsInitialized Then Exit Function 'If called from IDE before Init
     With Vars.Enums
         hadEnum = .hasEnum
         If .hasEnum Then RemoveUnusedEnums
@@ -1382,7 +1573,7 @@ Private Function DictEnum() As IUnknown
     Dim vtblptr As LongPtr
     '
     CopyMemory vtblptr, ByVal tempPtr, ptrSize
-    CopyMemory vtbl(0), ByVal vtblptr, ptrSize * 7 'Copy entire original virtual function table
+    CopyMemory vtbl(0), ByVal vtblptr, ptrSize * 7 'Copy original virtual table
     '
     CopyMemory vtbl(3), ByVal Vars.Dealloc.ThisPtr, ptrSize
     CopyMemory vtbl(3), ByVal vtbl(3) + ptrSize * 8, ptrSize 'Replace 'Next'
@@ -1512,7 +1703,8 @@ Private Sub ShiftEnumPointers(ByVal addrShift As LongPtr)
         .saP.rgsabound0.cElements = Vars.Count * 3
         If hasGaps Then
             For i = 5 To .saP.rgsabound0.cElements - 1 Step 3
-                If Mem.RPtr(i) <> NullPtr Then Mem.RPtr(i) = Mem.RPtr(i) + addrShift
+                If Mem.RPtr(i) <> NullPtr Then Mem.RPtr(i) = Mem.RPtr(i) _
+                                                           + addrShift
             Next i
         Else
             For i = 5 To .saP.rgsabound0.cElements - 1 Step 3
@@ -1563,17 +1755,67 @@ End Sub
 'Postpones termination to a later stage where we have full control over how VBA
 '   traverses the linked list of all dictionary instances
 Private Sub Class_Terminate()
-    'Deallocate enumerators just in case they are pointing to Keys
-    Set Vars.Enums.emptyColl = Nothing
-    Set Vars.Enums.enumsColl = Nothing
+    With Mem.Common(0)
+        .nestingLevel = .nestingLevel + 1
+        '
+        'Deallocate enumerators just in case they are pointing to Keys
+        Set Vars.Enums.emptyColl = Nothing
+        Set Vars.Enums.enumsColl = Nothing
+        '
+        'Avoid 'Out of stack space' caused by too many nested _Terminate calls
+        Const maxNestingBeforeDelay As Long = 256
+        If .nestingLevel > maxNestingBeforeDelay Then
+            Vars.DefInstance.ManageDeepNested Vars, delayNestedTermination
+        End If
+        '
+        'Nested Dictionaries must be terminated before we deallocate
+        Erase Vars.Keys
+        Erase Vars.Items
+        '
+        If .nestingLevel = 1 Then 'Clean-up for deeply nested
+            Do While .hasNestedPending
+                Vars.DefInstance.ManageDeepNested Vars, clearNestedDelayed
+            Loop
+        End If
+        '
+        'Cache this instance inside the global instance and destroy later
+        Vars.DefInstance.DelayTermination Me, Vars
+        Set Vars.DefInstance = Nothing
+        .nestingLevel = .nestingLevel - 1
+    End With
+End Sub
+
+Friend Sub ManageDeepNested(ByRef v As DictionaryVariables _
+                          , ByVal dnAction As DeepNestAction)
+    Static dicts As New Collection
+    Dim i As Long
     '
-    'Nested Dictionaries must be terminated before we deallocate this instance
-    Erase Vars.Keys
-    Erase Vars.Items
-    '
-    'Cache this instance inside the global instance and destroy later
-    Vars.DefInstance.DelayTermination Me, Vars
-    Set Vars.DefInstance = Nothing
+    If dnAction = clearNestedDelayed Then
+        For i = 1 To dicts.Count 'We don't go beyond current count
+            dicts.Remove 1       'This line can increase count indirectly if max
+        Next i                   ' nesting level is reached again via _Terminate
+    Else
+        For i = 0 To v.Count - 1
+        #If x64 Then
+            If v.Meta(i) And hmObject Then
+                If TypeOf v.Keys(i) Is Dictionary Then dicts.Add v.Keys(i)
+            End If
+            If v.Meta(i) And isItemObjBit Then
+                If TypeOf v.Items(i) Is Dictionary Then dicts.Add v.Items(i)
+            End If
+        #Else
+            If v.Keys(i).IsKeyObj Then
+                If TypeOf v.Keys(i).Value Is Dictionary Then
+                    dicts.Add v.Keys(i).Value
+                End If
+            End If
+            If v.Keys(i).IsItemObj Then
+                If TypeOf v.Items(i) Is Dictionary Then dicts.Add v.Items(i)
+            End If
+        #End If
+        Next i
+    End If
+    Mem.Common(0).hasNestedPending = (dicts.Count > 0)
 End Sub
 
 'When VB* terminates a class instance, it traverses all instances starting from
@@ -1675,4 +1917,10 @@ Friend Sub DelayTermination(ByRef dictToDelay As Dictionary _
         pendingPtr = v.Dealloc.ThisPtr
     End With
 End Sub
+#End If
+
+#If DEBUG_MODE Then
+Public Property Get LastCreatedInstancePtr() As LongPtr
+    LastCreatedInstancePtr = Mem.Common(0).lastInstancePtr
+End Property
 #End If

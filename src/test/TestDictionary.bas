@@ -10,22 +10,27 @@ Option Private Module
 
 Private Const invalidCallErr As Long = 5
 Private Const unsupportedKeyErr As Long = invalidCallErr
-Private Const keyNotFoundErr As Long = 9
+Private Const keyOrIndexNotFoundErr As Long = 9
 Private Const setMissingErr As Long = 450
 Private Const duplicatedKeyErr As Long = 457
 
 Public Sub RunAllDictionaryTests()
     TestEmptyDictionary
     TestDictionaryAdd
+    TestDictionaryAllowDuplicateKeys
     TestDictionaryCompare
     TestDictionaryCount
     TestDictionaryExists
     TestDictionaryFactory
     TestDictionaryHashVal
+    TestDictionaryIndex
     TestDictionaryItem
+    TestDictionaryItemAtIndex
     TestDictionaryItems
     TestDictionaryKey
+    TestDictionaryKeyAtIndex
     TestDictionaryKeys
+    TestDictionaryKeysItems2D
     TestDictionaryLoadFactor
     TestDictionaryNewEnum
     TestDictionaryRemove
@@ -83,6 +88,40 @@ End Sub
 Private Function GetDefaultInterface(ByVal obj As stdole.IUnknown) As Object
     Set GetDefaultInterface = obj
 End Function
+
+Private Sub TestDictionaryAllowDuplicateKeys()
+    Dim d As New Dictionary
+    d.AllowDuplicateKeys = True
+    '
+    d.Add 1, 2
+    d.Add 1, 3
+    '
+    Debug.Assert d(1) = 2
+    Debug.Assert d.Count = 2
+    Debug.Assert d.Items()(0) = 2
+    Debug.Assert d.Items()(1) = 3
+    '
+    d.Remove 1
+    Debug.Assert d(1) = 3
+    '
+    d.Add 1, 4
+    Debug.Assert d(1) = 3
+    Debug.Assert d.Count = 2
+    Debug.Assert d.Items()(0) = 3
+    Debug.Assert d.Items()(1) = 4
+    '
+    d.Key(1) = 2
+    Debug.Assert d(1) = 4
+    Debug.Assert d(2) = 3
+    '
+    On Error Resume Next
+    d.AllowDuplicateKeys = False
+    Debug.Assert Err.Number = invalidCallErr
+    On Error GoTo 0
+    '
+    d.RemoveAll
+    d.AllowDuplicateKeys = False
+End Sub
 
 Private Sub TestDictionaryCompare()
     Dim d As New Dictionary
@@ -301,6 +340,28 @@ Private Sub TestDictionaryHashVal()
     Debug.Assert d.HashVal("AAAAAA") = d.HashVal("AAaAAA")
 End Sub
 
+Private Sub TestDictionaryIndex()
+    Dim i As Long
+    Dim d As New Dictionary
+    '
+    For i = 0 To 50000
+        d.Add i, i
+    Next i
+    '
+    Debug.Assert d.Index(25000) = 25000
+    '
+    For i = 2001 To 20000
+        d.Remove i
+    Next i
+    '
+    Debug.Assert d.Index(25000) = 7000
+    '
+    On Error Resume Next
+    d.Index 15000
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    On Error GoTo 0
+End Sub
+
 Private Sub TestDictionaryItem()
     Dim d As New Dictionary
     Dim c As New Collection
@@ -350,11 +411,11 @@ Private Sub TestDictionaryItem()
     '
     On Error Resume Next
     v = d.Item("test")
-    Debug.Assert Err.Number = keyNotFoundErr
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
     For i = 100 To 105
         Err.Clear
         v = d.Item(i)
-        Debug.Assert Err.Number = keyNotFoundErr
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
     Next i
     Err.Clear
     v = d.Item(Array())
@@ -380,6 +441,81 @@ Private Sub TestDictionaryItem()
     Debug.Assert d("aa") = 1
     Debug.Assert d("AA") = 1
     Debug.Assert d("aA") = 1
+End Sub
+
+Private Sub TestDictionaryItemAtIndex()
+    Dim d As New Dictionary
+    Dim c As New Collection
+    Dim i As Long
+    Dim v As Variant
+    '
+    For i = 1 To 5
+        d.Add i, i
+    Next i
+    d.Add "coll", c
+    d.Add c, Nothing
+    d.Add "unk", GetDefaultInterface(c)
+    d.Add Empty, Null
+    d.Add Null, Empty
+    d.Add CVErr(2042), 312
+    '
+    Debug.Assert d.ItemAtIndex(5) Is c
+    Debug.Assert d.ItemAtIndex(6) Is Nothing
+    Debug.Assert d.ItemAtIndex(7) Is c
+    Debug.Assert Not d.ItemAtIndex(7) Is Nothing
+    For i = 1 To 5
+        Debug.Assert d.ItemAtIndex(i - 1) = i
+    Next i
+    Debug.Assert IsNull(d.ItemAtIndex(8))
+    Debug.Assert IsEmpty(d.ItemAtIndex(9))
+    Debug.Assert d.ItemAtIndex(10) = 312
+    '
+    d.ItemAtIndex(9) = 5
+    Debug.Assert d.ItemAtIndex(9) = 5
+    '
+    On Error Resume Next
+    d.ItemAtIndex(0) = c
+    Debug.Assert Err.Number = setMissingErr
+    On Error GoTo 0
+    '
+    Set d.ItemAtIndex(0) = c
+    Debug.Assert d.ItemAtIndex(0) Is c
+    '
+    d.ItemAtIndex(0) = 5
+    Debug.Assert d.ItemAtIndex(0) = 5
+    '
+    Set d.ItemAtIndex(0) = Nothing
+    Debug.Assert d.ItemAtIndex(0) Is Nothing
+    '
+    On Error Resume Next
+    v = d.ItemAtIndex(50)
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    For i = 100 To 105
+        Err.Clear
+        v = d.ItemAtIndex(i)
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    Next i
+    On Error GoTo 0
+    '
+    d.Remove 3
+    Debug.Assert d.ItemAtIndex(4) Is c
+    Debug.Assert d.ItemAtIndex(5) Is Nothing
+    Debug.Assert d.ItemAtIndex(6) Is c
+    Debug.Assert d.ItemAtIndex(0) Is Nothing
+    Debug.Assert d.ItemAtIndex(3) = 5
+    Debug.Assert IsNull(d.ItemAtIndex(7))
+    Debug.Assert d.ItemAtIndex(8) = 5
+    '
+    d.Remove 1
+    Debug.Assert d.ItemAtIndex(0) = 2
+    Debug.Assert d.ItemAtIndex(2) = 5
+    Debug.Assert IsNull(d.ItemAtIndex(6))
+    Debug.Assert d.ItemAtIndex(7) = 5
+    '
+    On Error Resume Next
+    v = d.ItemAtIndex(d.Count)
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    On Error GoTo 0
 End Sub
 
 Private Sub TestDictionaryItems()
@@ -422,10 +558,10 @@ Private Sub TestDictionaryKey()
     Debug.Assert Err.Number = duplicatedKeyErr
     Err.Clear
     d.Key("oldKeyX") = "newKey"
-    Debug.Assert Err.Number = keyNotFoundErr
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
     Err.Clear
     d.Key("oldkey") = "newKey"
-    Debug.Assert Err.Number = keyNotFoundErr
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
     Err.Clear
     d.Key(Array()) = "newKey"
     Debug.Assert Err.Number = unsupportedKeyErr
@@ -458,7 +594,7 @@ Private Sub TestDictionaryKey()
     Debug.Assert Err.Number = duplicatedKeyErr
     Err.Clear
     d.Key("oldKeyX") = "newkey"
-    Debug.Assert Err.Number = keyNotFoundErr
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
     Err.Clear
     d.Key("oldkey") = "newKey"
     Debug.Assert Err.Number = 0
@@ -474,6 +610,63 @@ Private Sub TestDictionaryKey()
     Err.Clear
     d.Key("oldkey") = "newKey"
     Debug.Assert Err.Number = 0
+    On Error GoTo 0
+End Sub
+
+Private Sub TestDictionaryKeyAtIndex()
+    Dim d As New Dictionary
+    Dim c As New Collection
+    Dim i As Long
+    Dim v As Variant
+    '
+    For i = 1 To 5
+        d.Add i, i
+    Next i
+    d.Add "coll", c
+    d.Add c, Nothing
+    d.Add "unk", GetDefaultInterface(c)
+    d.Add Empty, Null
+    d.Add Null, Empty
+    d.Add CVErr(2042), 312
+    '
+    Debug.Assert d.KeyAtIndex(5) = "coll"
+    Debug.Assert d.KeyAtIndex(6) Is c
+    Debug.Assert d.KeyAtIndex(7) = "unk"
+    For i = 1 To 5
+        Debug.Assert d.KeyAtIndex(i - 1) = i
+    Next i
+    Debug.Assert IsEmpty(d.KeyAtIndex(8))
+    Debug.Assert IsNull(d.KeyAtIndex(9))
+    Debug.Assert IsError(d.KeyAtIndex(10))
+    '
+    On Error Resume Next
+    v = d.KeyAtIndex(50)
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    For i = 100 To 105
+        Err.Clear
+        v = d.KeyAtIndex(i)
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    Next i
+    On Error GoTo 0
+    '
+    d.Remove 3
+    Debug.Assert d.KeyAtIndex(4) = "coll"
+    Debug.Assert d.KeyAtIndex(5) Is c
+    Debug.Assert d.KeyAtIndex(6) = "unk"
+    Debug.Assert d.KeyAtIndex(0) = 1
+    Debug.Assert d.KeyAtIndex(3) = 5
+    Debug.Assert IsEmpty(d.KeyAtIndex(7))
+    Debug.Assert IsNull(d.KeyAtIndex(8))
+    '
+    d.Remove 1
+    Debug.Assert d.KeyAtIndex(0) = 2
+    Debug.Assert d.KeyAtIndex(2) = 5
+    Debug.Assert IsEmpty(d.KeyAtIndex(6))
+    Debug.Assert IsNull(d.KeyAtIndex(7))
+    '
+    On Error Resume Next
+    v = d.KeyAtIndex(d.Count)
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
     On Error GoTo 0
 End Sub
 
@@ -503,6 +696,62 @@ Private Sub TestDictionaryKeys()
     '
     d.RemoveAll
     Debug.Assert ArrayToCSV(d.Keys) = "[]"
+End Sub
+
+Private Sub TestDictionaryKeysItems2D()
+    Dim d As New Dictionary
+    Dim i As Long
+    Dim arr() As Variant
+    '
+    For i = 1 To 5
+        d.Add i, i + 10
+    Next i
+    '
+    arr = d.KeysItems2D
+    For i = 1 To 5
+        Debug.Assert arr(i - 1, 0) = i
+        Debug.Assert arr(i - 1, 1) = i + 10
+    Next i
+    '
+    d.Add "coll", New Collection
+    d.Add 111, Nothing
+    d.Add Empty, Null
+    d.Add Null, Empty
+    d.Add CVErr(2042), 312
+    '
+    arr = d.KeysItems2D
+    Debug.Assert arr(5, 0) = "coll"
+    Debug.Assert arr(6, 0) = 111
+    Debug.Assert IsEmpty(arr(7, 0))
+    Debug.Assert IsNull(arr(8, 0))
+    Debug.Assert IsError(arr(9, 0))
+    Debug.Assert TypeOf arr(5, 1) Is Collection
+    Debug.Assert arr(6, 1) Is Nothing
+    Debug.Assert IsNull(arr(7, 1))
+    Debug.Assert IsEmpty(arr(8, 1))
+    Debug.Assert arr(9, 1) = 312
+    '
+    For i = 1 To 3
+        d.Remove i
+    Next i
+    d.Remove 111
+    d.Remove "coll"
+    d.Remove CVErr(2042)
+    '
+    arr = d.KeysItems2D
+    Debug.Assert arr(0, 0) = 4
+    Debug.Assert arr(1, 0) = 5
+    Debug.Assert IsEmpty(arr(2, 0))
+    Debug.Assert IsNull(arr(3, 0))
+    Debug.Assert arr(0, 1) = 14
+    Debug.Assert arr(1, 1) = 15
+    Debug.Assert IsNull(arr(2, 1))
+    Debug.Assert IsEmpty(arr(3, 1))
+    '
+    d.RemoveAll
+    arr = d.KeysItems2D
+    Debug.Assert UBound(arr, 1) - LBound(arr, 1) = -1
+    Debug.Assert UBound(arr, 2) - LBound(arr, 2) = 0
 End Sub
 
 Private Sub TestDictionaryLoadFactor()
@@ -692,7 +941,7 @@ Private Sub TestDictionaryRemove()
     '
     On Error Resume Next
     d.Remove Empty
-    Debug.Assert Err.Number = keyNotFoundErr
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
     On Error GoTo 0
     '
     For i = 1 To 10
@@ -723,10 +972,10 @@ Private Sub TestDictionaryRemove()
     '
     On Error Resume Next
     d.Remove 1
-    Debug.Assert Err.Number = keyNotFoundErr
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
     Err.Clear
     d.Remove CStr(1)
-    Debug.Assert Err.Number = keyNotFoundErr
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
     On Error GoTo 0
     '
     d.Add Null, Empty
@@ -738,7 +987,7 @@ Private Sub TestDictionaryRemove()
     '
     On Error Resume Next
     d.Remove Null
-    Debug.Assert Err.Number = keyNotFoundErr
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
     Err.Clear
     d.Remove Array()
     Debug.Assert Err.Number = unsupportedKeyErr
