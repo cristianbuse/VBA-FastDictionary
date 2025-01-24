@@ -23,6 +23,7 @@ Public Sub RunAllDictionaryTests()
     TestDictionaryExists
     TestDictionaryFactory
     TestDictionaryHashVal
+    TestDictionaryIndex
     TestDictionaryItem
     TestDictionaryItems
     TestDictionaryKey
@@ -109,6 +110,14 @@ Private Sub TestDictionaryAllowDuplicateKeys()
     d.Key(1) = 2
     Debug.Assert d(1) = 4
     Debug.Assert d(2) = 3
+    '
+    On Error Resume Next
+    d.AllowDuplicateKeys = False
+    Debug.Assert Err.Number = invalidCallErr
+    On Error GoTo 0
+    '
+    d.RemoveAll
+    d.AllowDuplicateKeys = False
 End Sub
 
 Private Sub TestDictionaryCompare()
@@ -326,6 +335,28 @@ Private Sub TestDictionaryHashVal()
     d.CompareMode = vbTextCompare
     Debug.Assert d.HashVal("AA") = d.HashVal("aa")
     Debug.Assert d.HashVal("AAAAAA") = d.HashVal("AAaAAA")
+End Sub
+
+Private Sub TestDictionaryIndex()
+    Dim i As Long
+    Dim d As New Dictionary
+    '
+    For i = 0 To 50000
+        d.Add i, i
+    Next i
+    '
+    Debug.Assert d.Index(25000) = 25000
+    '
+    For i = 2001 To 20000
+        d.Remove i
+    Next i
+    '
+    Debug.Assert d.Index(25000) = 7000
+    '
+    On Error Resume Next
+    d.Index 15000
+    Debug.Assert Err.Number = keyNotFoundErr
+    On Error GoTo 0
 End Sub
 
 Private Sub TestDictionaryItem()

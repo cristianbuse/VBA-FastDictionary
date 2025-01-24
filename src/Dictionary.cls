@@ -712,6 +712,7 @@ Public Property Let CompareMode(ByVal compMode As VbCompareMethod)
 #End If
 End Property
 
+'Can only be changed if there are no stored items
 Public Property Get AllowDuplicateKeys() As Boolean
     AllowDuplicateKeys = Vars.AllowDuplicateKeys
 End Property
@@ -728,6 +729,40 @@ End Property
 
 Public Function Exists(ByRef Key As Variant) As Boolean
     Exists = (GetIndex(Key) > notFound)
+End Function
+
+Public Function Index(ByRef Key As Variant) As Long
+    Dim i As Long: i = GetIndex(Key)
+    If i = notFound Then Err.Raise 9
+    '
+    If Vars.UsedCount < Vars.Count Then
+        Index = i - CountRemoved(i)
+    Else
+        Index = i
+    End If
+End Function
+Private Function CountRemoved(ByVal upTo As Long) As Long
+    Dim i As Long
+    Dim startIndex As Long
+    Dim endIndex As Long
+    Dim isFirstHalf As Boolean: isFirstHalf = (upTo < Vars.Count \ 2)
+    '
+    If isFirstHalf Then
+        endIndex = upTo - 1
+    Else
+        startIndex = upTo + 1
+        endIndex = Vars.Count
+    End If
+    For i = startIndex To endIndex
+        #If x64 Then
+            If Vars.Meta(i) = hmRemoved Then CountRemoved = CountRemoved + 1
+        #Else
+            If Vars.Keys(i).Meta = hmRemoved Then CountRemoved = CountRemoved + 1
+        #End If
+    Next i
+    If Not isFirstHalf Then
+        CountRemoved = Vars.Count - Vars.UsedCount - CountRemoved
+    End If
 End Function
 
 'Raises Error:
