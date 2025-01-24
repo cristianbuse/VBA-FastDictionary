@@ -28,6 +28,7 @@ Public Sub RunAllDictionaryTests()
     TestDictionaryItemAtIndex
     TestDictionaryItems
     TestDictionaryKey
+    TestDictionaryKeyAtIndex
     TestDictionaryKeys
     TestDictionaryLoadFactor
     TestDictionaryNewEnum
@@ -608,6 +609,63 @@ Private Sub TestDictionaryKey()
     Err.Clear
     d.Key("oldkey") = "newKey"
     Debug.Assert Err.Number = 0
+    On Error GoTo 0
+End Sub
+
+Private Sub TestDictionaryKeyAtIndex()
+    Dim d As New Dictionary
+    Dim c As New Collection
+    Dim i As Long
+    Dim v As Variant
+    '
+    For i = 1 To 5
+        d.Add i, i
+    Next i
+    d.Add "coll", c
+    d.Add c, Nothing
+    d.Add "unk", GetDefaultInterface(c)
+    d.Add Empty, Null
+    d.Add Null, Empty
+    d.Add CVErr(2042), 312
+    '
+    Debug.Assert d.KeyAtIndex(5) = "coll"
+    Debug.Assert d.KeyAtIndex(6) Is c
+    Debug.Assert d.KeyAtIndex(7) = "unk"
+    For i = 1 To 5
+        Debug.Assert d.KeyAtIndex(i - 1) = i
+    Next i
+    Debug.Assert IsEmpty(d.KeyAtIndex(8))
+    Debug.Assert IsNull(d.KeyAtIndex(9))
+    Debug.Assert IsError(d.KeyAtIndex(10))
+    '
+    On Error Resume Next
+    v = d.KeyAtIndex(50)
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    For i = 100 To 105
+        Err.Clear
+        v = d.KeyAtIndex(i)
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    Next i
+    On Error GoTo 0
+    '
+    d.Remove 3
+    Debug.Assert d.KeyAtIndex(4) = "coll"
+    Debug.Assert d.KeyAtIndex(5) Is c
+    Debug.Assert d.KeyAtIndex(6) = "unk"
+    Debug.Assert d.KeyAtIndex(0) = 1
+    Debug.Assert d.KeyAtIndex(3) = 5
+    Debug.Assert IsEmpty(d.KeyAtIndex(7))
+    Debug.Assert IsNull(d.KeyAtIndex(8))
+    '
+    d.Remove 1
+    Debug.Assert d.KeyAtIndex(0) = 2
+    Debug.Assert d.KeyAtIndex(2) = 5
+    Debug.Assert IsEmpty(d.KeyAtIndex(6))
+    Debug.Assert IsNull(d.KeyAtIndex(7))
+    '
+    On Error Resume Next
+    v = d.KeyAtIndex(d.Count)
+    Debug.Assert Err.Number = keyOrIndexNotFoundErr
     On Error GoTo 0
 End Sub
 

@@ -82,6 +82,8 @@ Attribute VB_Exposed = False
 ''         - Returns or replaces the Key at the specified index
 ''    * Key <Let>
 ''         - Allows a Key value to be changed while preserving the Item
+''    * KeyAtIndex
+''         - Returns the Key at the specified index
 ''    * LoadFactor <Get>
 ''         - Returns the current % load for the hash map containing indexes
 ''    * AllowDuplicateKeys <Get/Let>
@@ -989,6 +991,27 @@ Private Sub ClearMapIndex(ByRef groupSlot As Long, ByRef posInGroup As Long)
         .Count = .Count - 1
     End With
 End Sub
+
+'Raises Error:
+'   -    9: invalid index
+Public Property Get KeyAtIndex(ByVal i As Long) As Variant
+    If i < 0 Or i >= Vars.UsedCount Then Err.Raise 9
+    If Vars.UsedCount < Vars.Count Then i = FindIndex(i)
+    '
+#If x64 Then
+    If Vars.Meta(i) And hmObject Then
+        Set KeyAtIndex = Vars.Keys(i)
+    Else
+        KeyAtIndex = Vars.Keys(i)
+    End If
+#Else
+    If Vars.Keys(i).IsKeyObj Then
+        Set KeyAtIndex = Vars.Keys(i).Value
+    Else
+        KeyAtIndex = Vars.Keys(i).Value
+    End If
+#End If
+End Property
 
 Public Property Get Keys() As Variant()
     If Vars.UsedCount = 0 Then
