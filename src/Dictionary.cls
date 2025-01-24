@@ -48,6 +48,8 @@ Attribute VB_Exposed = False
 ''         - Checks if a specified Key exists
 ''    * Factory
 ''         - Returns a new Dictionary instance
+''    * Index
+''         - Returns the index for a specified Key
 ''    * Items
 ''         - Returns a 1D array of all the Items
 ''    * Keys
@@ -76,6 +78,8 @@ Attribute VB_Exposed = False
 ''         - Changes the value of an Item identified by the specified Key
 ''         - Default Member. d.Item(Key) = n can be called as d(Key) = n
 ''         - If Key does not exist then the pair is added via 'Add'
+''    * ItemAtIndex <Get><Let><Set>
+''         - Returns or replaces the Key at the specified index
 ''    * Key <Let>
 ''         - Allows a Key value to be changed while preserving the Item
 ''    * LoadFactor <Get>
@@ -819,6 +823,61 @@ Public Property Set Item(ByRef Key As Variant, ByRef Item As Object)
         Add Key, Item
     End If
 End Property
+
+'Raises Error:
+'   -    9: invalid index
+'   -  450: 'Set' is missing when assigning an object
+Public Property Get ItemAtIndex(ByVal i As Long) As Variant
+    If i < 0 Or i >= Vars.UsedCount Then Err.Raise 9
+    If Vars.UsedCount < Vars.Count Then i = FindIndex(i)
+    '
+#If x64 Then
+    If Vars.Meta(i) And isItemObjBit Then
+#Else
+    If Vars.Keys(i).IsItemObj Then
+#End If
+        Set ItemAtIndex = Vars.Items(i)
+    Else
+        ItemAtIndex = Vars.Items(i)
+    End If
+End Property
+Public Property Let ItemAtIndex(ByVal i As Long, ByRef Item As Variant)
+    If i < 0 Or i >= Vars.UsedCount Then Err.Raise 9
+    If IsObject(Item) Or (VarType(Item) = vbDataObject) Then
+        Err.Raise 450, TypeName(Me) & ".ItemAtIndex", "'Set' is required"
+    End If
+    '
+    If Vars.UsedCount < Vars.Count Then i = FindIndex(i)
+    #If x64 Then
+        Vars.Meta(i) = Vars.Meta(i) And keyBitMask
+    #Else
+        Vars.Keys(i).IsItemObj = False
+    #End If
+    Vars.Items(i) = Item
+End Property
+Public Property Set ItemAtIndex(ByVal i As Long, ByRef Item As Object)
+    If i < 0 Or i >= Vars.UsedCount Then Err.Raise 9
+    If Vars.UsedCount < Vars.Count Then i = FindIndex(i)
+    '
+    #If x64 Then
+        Vars.Meta(i) = Vars.Meta(i) Or isItemObjBit
+    #Else
+        Vars.Keys(i).IsItemObj = True
+    #End If
+    Set Vars.Items(i) = Item
+End Property
+Private Function FindIndex(ByVal i As Long) As Long
+    Dim j As Long
+    For j = 0 To Vars.Count - 1
+        #If x64 Then
+            If Vars.Meta(j) <> hmRemoved Then i = i - 1
+        #Else
+            If Vars.Keys(j).Meta <> hmRemoved Then i = i - 1
+        #End If
+        If i < 0 Then Exit For
+    Next j
+    FindIndex = j
+End Function
 
 Public Property Get Items() As Variant()
     If Vars.UsedCount = 0 Then
