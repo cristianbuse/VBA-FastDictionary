@@ -687,7 +687,12 @@ To account for all the scenarios above, this Dictionary has additional managemen
 ## Additional functionality
 
 Compared to a Scripting.Dictionary, this Dictionary has a few extra methods that can be useful:
+- ```AllowDuplicateKeys```
 - ```Factory``` - returns a new Dictionary instance
+- ```Index``` - returns the index for a specified Key
+- ```ItemAtIndex``` - returns or replaces the Item at the specified index
+- ```KeyAtIndex``` - returns the Key at the specified index
+- ```KeysItems2D``` - returns a 2D array of all the Keys and Items
 - ```PredictCount``` - if the number of Key-Item pairs is known upfront or if a good guess is possible, then a call to ```PredictCount``` with the expected number of pairs will prepare the internal size of the hash map so that there are no calls made to ```Rehash```. This results in better performance
 - ```Self``` - this method is useful in ```With New Dictionary``` code blocks
 

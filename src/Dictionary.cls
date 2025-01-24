@@ -81,7 +81,7 @@ Attribute VB_Exposed = False
 ''         - Default Member. d.Item(Key) = n can be called as d(Key) = n
 ''         - If Key does not exist then the pair is added via 'Add'
 ''    * ItemAtIndex <Get><Let><Set>
-''         - Returns or replaces the Key at the specified index
+''         - Returns or replaces the Item at the specified index
 ''    * Key <Let>
 ''         - Allows a Key value to be changed while preserving the Item
 ''    * KeyAtIndex
