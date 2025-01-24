@@ -30,6 +30,7 @@ Public Sub RunAllDictionaryTests()
     TestDictionaryKey
     TestDictionaryKeyAtIndex
     TestDictionaryKeys
+    TestDictionaryKeysItems2D
     TestDictionaryLoadFactor
     TestDictionaryNewEnum
     TestDictionaryRemove
@@ -695,6 +696,62 @@ Private Sub TestDictionaryKeys()
     '
     d.RemoveAll
     Debug.Assert ArrayToCSV(d.Keys) = "[]"
+End Sub
+
+Private Sub TestDictionaryKeysItems2D()
+    Dim d As New Dictionary
+    Dim i As Long
+    Dim arr() As Variant
+    '
+    For i = 1 To 5
+        d.Add i, i + 10
+    Next i
+    '
+    arr = d.KeysItems2D
+    For i = 1 To 5
+        Debug.Assert arr(i - 1, 0) = i
+        Debug.Assert arr(i - 1, 1) = i + 10
+    Next i
+    '
+    d.Add "coll", New Collection
+    d.Add 111, Nothing
+    d.Add Empty, Null
+    d.Add Null, Empty
+    d.Add CVErr(2042), 312
+    '
+    arr = d.KeysItems2D
+    Debug.Assert arr(5, 0) = "coll"
+    Debug.Assert arr(6, 0) = 111
+    Debug.Assert IsEmpty(arr(7, 0))
+    Debug.Assert IsNull(arr(8, 0))
+    Debug.Assert IsError(arr(9, 0))
+    Debug.Assert TypeOf arr(5, 1) Is Collection
+    Debug.Assert arr(6, 1) Is Nothing
+    Debug.Assert IsNull(arr(7, 1))
+    Debug.Assert IsEmpty(arr(8, 1))
+    Debug.Assert arr(9, 1) = 312
+    '
+    For i = 1 To 3
+        d.Remove i
+    Next i
+    d.Remove 111
+    d.Remove "coll"
+    d.Remove CVErr(2042)
+    '
+    arr = d.KeysItems2D
+    Debug.Assert arr(0, 0) = 4
+    Debug.Assert arr(1, 0) = 5
+    Debug.Assert IsEmpty(arr(2, 0))
+    Debug.Assert IsNull(arr(3, 0))
+    Debug.Assert arr(0, 1) = 14
+    Debug.Assert arr(1, 1) = 15
+    Debug.Assert IsNull(arr(2, 1))
+    Debug.Assert IsEmpty(arr(3, 1))
+    '
+    d.RemoveAll
+    arr = d.KeysItems2D
+    Debug.Assert UBound(arr, 1) - LBound(arr, 1) = -1
+    Debug.Assert UBound(arr, 2) - LBound(arr, 2) = 0
 End Sub
 
 Private Sub TestDictionaryLoadFactor()
