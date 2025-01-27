@@ -1489,7 +1489,7 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
 End Sub
 
 'https://stackoverflow.com/a/9516565/8488913
-Public Property Get InIde() As Boolean
+Private Property Get InIde() As Boolean
     Debug.Assert SetTrue(InIde)
 End Property
 Private Function SetTrue(ByRef b As Boolean) As Boolean
@@ -1797,21 +1797,11 @@ Friend Sub ManageDeepNested(ByRef v As DictionaryVariables _
     Else
         For i = 0 To v.Count - 1
         #If x64 Then
-            If v.Meta(i) And hmObject Then
-                If TypeOf v.Keys(i) Is Dictionary Then dicts.Add v.Keys(i)
-            End If
-            If v.Meta(i) And isItemObjBit Then
-                If TypeOf v.Items(i) Is Dictionary Then dicts.Add v.Items(i)
-            End If
+            If v.Meta(i) And hmObject Then dicts.Add v.Keys(i)
+            If v.Meta(i) And isItemObjBit Then dicts.Add v.Items(i)
         #Else
-            If v.Keys(i).IsKeyObj Then
-                If TypeOf v.Keys(i).Value Is Dictionary Then
-                    dicts.Add v.Keys(i).Value
-                End If
-            End If
-            If v.Keys(i).IsItemObj Then
-                If TypeOf v.Items(i) Is Dictionary Then dicts.Add v.Items(i)
-            End If
+            If v.Keys(i).IsKeyObj Then dicts.Add v.Keys(i).Value
+            If v.Keys(i).IsItemObj Then dicts.Add v.Items(i)
         #End If
         Next i
     End If
