@@ -782,12 +782,9 @@ Attribute Item.VB_UserMemId = 0
 'Attribute Item.VB_UserMemId = 0
     Dim i As Long: i = GetIndex(Key)
     '
-#If TWINBASIC Then
+    'We raise error manually to avoid issue #14
+    'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
     If i = notFound Then Err.Raise 9
-#Else
-    'A check like i = notFound is avoided for speed purposes
-    '   because error 9 is raised anyway when accessing the data arrays
-#End If
 #If x64 Then
     If Vars.Meta(i) And isItemObjBit Then
 #Else
@@ -930,12 +927,9 @@ Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     If GetIndex(NewKey, hVal, , controlByte) > notFound Then Err.Raise 457
     i = GetIndex(OldKey, , groupSlot, , posInGroup)
     '
-#If TWINBASIC Then
+    'We raise error manually to avoid issue #14
+    'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
     If i = notFound Then Err.Raise 9
-#Else
-    'A check like i = notFound is avoided for speed purposes
-    '   because error 9 is raised anyway when accessing the Keys array
-#End If
     '
     'Replace Key and Meta while preserving Item
 #If x64 Then

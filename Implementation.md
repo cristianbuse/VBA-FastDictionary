@@ -114,8 +114,6 @@ However, the new Dictionary (this repo) casts ```Single``` to ```Double```. This
 
 This Dictionary only raises errors 5, 9, 450 and 457. For example Scripting.Dictionary raises error 32811 if calling ```Remove``` with a key that does not exist while this Dictionary raises error 9 (Subscript out of Range).
 
-The main reason not to adhere to the same error numbers is speed. For example in the [```Item```](https://github.com/cristianbuse/VBA-FastDictionary/blob/2cce33fb21498720d992538e546d17e6822381f0/src/Dictionary.cls#L681-L682) method, instead of using an extra ```If``` statement to check if the call to ```GetIndex``` returns ```NOT_FOUND```, the code simply continues and if the key was indeed missing, error 9 is raised anyway when trying to access the storage array with an invalid index. Other methods like ```Remove``` will simply return error 9 for consistency. The omission of the extra ```If``` statement does not impact speed for a few items but for millions of items there is a difference and speed was chosen over consistency here.
-
 ### Item (Get) incompatibility
 
 When calling the ```Item``` (Get) property with a key that does not exist, the ```Scripting.Dictionary``` adds a new key-item pair where the key is the key that did not exist previously, and the item is ```Empty```. This kind of behaviour makes sense in the ```Let``` or ```Set``` counterparts of the ```Item``` property - which is why this Dictionary emulates the same behaviour. However, for the ```Get``` property this does not make much sense. On the contrary, it's misleading. Moreover, most likely no one would ever rely on this kind of functionality considering the ```Exists``` method does not throw an error if avoiding errors is the goal.
