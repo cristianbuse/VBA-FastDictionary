@@ -37,7 +37,7 @@ This Dictionary does not require any DLL references or any kind of external libr
   - [VBA x64 class method call mechanism](#vba-class-method-call-mechanism)
     - [Class virtual table](#class-virtual-table)
     - [Class method code](#class-method-code)
-
+  - [Stack Bug Fixes](#stack-bug-fixes)
 ***
 
 ## Compatibility with ```Scripting.Dictionary```
@@ -874,7 +874,102 @@ FFE0                   ; JMP RAX
 
 The asm code pointed by the entries in the class virtual table is only called via late-binding and in turn calls a wrapper code (pointed by the ```RAX``` register) that eventually calls the PCode (pointed by the ```RDX``` register).
 
-The ```RDX``` value always matches the value at function pointer address less 8 bytes e.g.```[testPtr - 8]```. For early-binded calls, this pointer at -8 offset is used to access the PCode directly.
+The ```RDX``` value always matches the value at function pointer address less 8 bytes e.g.```[testPtr - 8]```. For early-binded calls, this pointer at -8 offset is used to access the PCode.
+
+So how does the late-binding wrapper (pointed by RAX) look like? Here are just a few lines:
+```assembly
+4C0FB74210            ; MOVZX R8,WORD PTR [RDX+10]       ; Reads 2-Byte Int from RDX+16 which is related to early-binding PCode. This value seems 0 all the time. Then zero-extends to a 8-Byte (6 upper bytes zero) and moves value into R8
+4D290424              ; SUB QWORD PTR [R12],R8           ; Subtract value of R8 from the value at address pointed by R12. This suggests the 2-Byte Int was some kind of offset
+488B5208              ; MOV RDX,QWORD PTR [RDX+08]       ; Reads Pointer from RDX+8 which is basically pointing to the actual function PCode instructions. Then writes that pointer to RDX
+48B91D7C75F6FA7F0000  ; MOV RCX,00007FFAF6757C1D         ; Writes literal into RCX. Seems to be same value even after recompilation (including app restart)
+55                    ; PUSH RBP                         ; Pushes RBP onto stack (decrements RSP by 8 and then stores RBP at the top of the stack). Basically starts setting up a new stack frame
+488BEC                ; MOV RBP,RSP                      ; Saves stack pointer value into RBP
+4881EC50010000        ; SUB RSP,0000000000000150         ; Allocates 336 bytes on the stack
+
+4C89BC2480000000      ; MOV QWORD PTR [RSP+00000080],R15 ; Saves R15 value at RSP+128
+4C89742478            ; MOV QWORD PTR [RSP+78],R14       ; Saves R14 value at RSP+120
+4C896C2470            ; MOV QWORD PTR [RSP+70],R13       ; Saves R13 value at RSP+112
+66480F7E6C2468        ; MOVQ QWORD PTR [RSP+68],XMM5     ; Saves XMM5 value at RSP+104
+48897C2460            ; MOV QWORD PTR [RSP+60],RDI       ; Saves RDI value at RSP+96
+4889742458            ; MOV QWORD PTR [RSP+58],RSI       ; Saves RSI value at RSP+88
+48895C2450            ; MOV QWORD PTR [RSP+50],RBX       ; Saves RBX value at RSP+80
+
+4C8BEC                ; MOV R13,RSP                      ; Saves stack pointer value into R13
+4C89A578FFFFFF        ; MOV QWORD PTR [RBP-00000088],R12 ; Saves R12 value at RBP-136
+4D8BF4                ; MOV R14,R12                      ; Saves R12 into R14
+488BDA                ; MOV RBX,RDX                      ; Saves RDX into RBX
+48899D68FFFFFF        ; MOV QWORD PTR [RBP-00000098],RBX ; Saves RBX at RBP-152 (RBP is base pointer for current stack frame)
+48898D38FFFFFF        ; MOV QWORD PTR [RBP-000000C8],RCX ; Saves RCX at RBP-200
+498BC0                ; MOV RAX,R8                       ; Saves R8 into RAX
+
+DBE2                  ; FNCLEX                           ; Clears the floating-point exception flags in the x87 FPU (Floating Point Unit) status word
+488D15E20E0700        ; LEA RDX,[0000000000070F56]       ; Loads RIP+0x70EE2 (# 0x70F56) into RDX. RIP is Instruction Pointer Register
+
+488B3B                ; MOV RDI,QWORD PTR [RBX]          ; Reads pointer from RBX which is basically the PCode pointer. Then writes that pointer to RDI (Destination Index Register - often used in string operations)
+488B7760              ; MOV RSI,QWORD PTR [RDI+60]       ; Reads Pointer from RDI+96 then writes that pointer to RSI
+4889B560FFFFFF        ; MOV QWORD PTR [RBP-000000A0],RSI ; Saves RSI value at RBP-160
+
+488B7708              ; MOV RSI,QWORD PTR [RDI+08]       ; Reads Pointer from RDI+8 then writes that pointer to RSI
+488B7628              ; MOV RSI,QWORD PTR [RSI+28]       ; Reads Pointer from RSI+40 then writes that pointer to RSI. Linked-list?
+488B7610              ; MOV RSI,QWORD PTR [RSI+10]       ; Reads Pointer from RSI+16 then writes that pointer to RSI.
+488975B8              ; MOV QWORD PTR [RBP-48],RSI       ; Saves RSI value at RBP-72
+48895590              ; MOV QWORD PTR [RBP-70],RDX       ; Saves the previous address 0x70F56 (RIP+0x70EE2) at RBP-112
+C7458800000000        ; MOV DWORD PTR [RBP-78],00000000  ; Saves 4-Byte Int 0x0 at RBP-120
+4C8D05EF620000        ; LEA R8,[0000000000006393]        ; Loads RIP+0x62EF (# 0x6393) into RDX
+493BC8                ; CMP RCX,R8                       ; 
+0F85C1000000          ; JNE 000000000000016E
+
+66F743141000          ; TEST WORD PTR [RBX+14],0010
+744A                  ; JE 00000000000000FF
+
+498B0E                ; MOV RCX,QWORD PTR [R14]
+480BC9                ; OR RCX,RCX                       ; For updating flags, specifically Zero Flag and Sign Flag
+0F8483000000          ; JE 0000000000000144
+; ...
+```
+
+In other words, we can heavily simplify a class method call to this:
+- early-binded call
+  - Push arguments to stack
+  - Read Temp pointer at Function pointer - 8
+  - Read PCODE Header pointer at Temp pointer + 8
+  - Read PCode Arguments Size (including instance pointer and function return) at PCode Header pointer + 8 (WORD)
+  - Read PCode Variables Size at PCode Header Pointer + 10 (WORD)
+  - Read PCode Size at PCode Header Pointer + 12 (DWORD)
+  - Run PCode at PCode Header Pointer - PCode Size
+  - Decrease Stack Pointer by PCode Arguments Size + PCode Variables Size
+  - Return
+- late-binded call
+  - Push arguments to stack
+  - Call ```IDispatch::Invoke```
+  - Create stack frame
+  - Push arguments to stack (ByRef i.e. pointing to original arguments)
+  - Call ASM at function pointer
+  - Increase R12 to account for the ByRef arguments pushed by ```Invoke```
+  - Copy Arguments starting with R12+0x0
+  - Put Temp Pointer into RDX
+  - Jump to global wrapper pointed by RAX
+  - Read PCODE Header pointer at Temp pointer (RDX) + 8
+  - Create new stack frame
+  - Save R12 which accounts for arguments pushed by ```Invoke``` 
+  - Read PCode Arguments Size (including instance pointer and function return) at PCode Header pointer + 8 (WORD)
+  - Read PCode Variables Size at PCode Header Pointer + 10 (WORD)
+  - Read PCode Size at PCode Header Pointer + 12 (DWORD)
+  - Run PCode at PCode Header Pointer - PCode Size
+  - Decrease Stack Pointer by PCode Arguments Size + PCode Variables Size
+  - Return to global wrapper
+  - Remove stack frame
+  - Return to ```Invoke```
+  - Remove stack frame
+  - Return
+
+### Stack Bug fixes
+
+Unfortunately, for the above mentioned bugs with [For Each](https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes) and [Class_Terminate](https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug), VBA does not increase the stack size correctly and final code ends up overwriting values that are part of the previous stack frame.
+
+This class simply adds addtional, unused space to the stack. This makes sure that values in the previous stack frame are not overwritten in these special circumstances.
+For a ```For Each``` call we cannot possibly know how big the previous stack frame is, so we add a large amount e.g. 2048 bytes. For the ```Class_Terminate``` call this is simpler because we know there are no arguments and no function return. In this implementation there are also no local variables. While the original needed size is only 8 bytes (for the instance pointer), we add 24 bytes to account for a ```Variant``` size which can get overwritten as seen in the [Class_Terminate](https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug) bug.
+
+The code for the fixes is [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/4b93590de56cec7e92bc1f741ee068d1e87e9527/src/Dictionary.cls#L1494-L1542). We find the enumerator function pointer because we strategically place it as the first method in the class (i.e. 8th method in the virtual table) and we find the ```_Terminate``` pointer by finding the 4th method in the virtual table of the ```IClassModuleEvt``` interface. Note that while we increase R12 register in the late-binding assembly called by ```IDispatch:::Invoke```, we must also make sure we decrease the stack size in the PCode Arguments Size which is always called (late or early).
 
 
-To be continued..
