@@ -314,6 +314,62 @@ Attribute NewEnum.VB_UserMemId = -4
     Set NewEnum = DictEnum
 End Function
 
+'Item (Get) must be the second method so that it's virtual table position is known.
+'This is because we want to fix the x64 bug related to stack misalignment on late-binding
+'https://github.com/cristianbuse/VBA-FastDictionary/issues/16
+
+'Raises Error:
+'   -    9: invalid key (key is not associated with any element)
+'   -  450: 'Set' is missing when assigning an object
+'@DefaultMember
+Public Property Get Item(ByRef Key As Variant) As Variant
+Attribute Item.VB_UserMemId = 0
+'Attribute Item.VB_UserMemId = 0
+    Dim i As Long: i = GetIndex(Key)
+    '
+    'We raise error manually to avoid issue #14
+    'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
+    If i = notFound Then Err.Raise 9
+#If x64 Then
+    If Vars.Meta(i) And isItemObjBit Then
+#Else
+    If Vars.Keys(i).IsItemObj Then
+#End If
+        Set Item = Vars.Items(i)
+    Else
+        Item = Vars.Items(i)
+    End If
+End Property
+Public Property Let Item(ByRef Key As Variant, ByRef Item As Variant)
+    If IsObject(Item) Or (VarType(Item) = vbDataObject) Then
+        Err.Raise 450, TypeName(Me) & ".Item", "'Set' is required"
+    End If
+    Dim i As Long: i = GetIndex(Key)
+    If i > notFound Then
+        #If x64 Then
+            Vars.Meta(i) = Vars.Meta(i) And keyBitMask
+        #Else
+            Vars.Keys(i).IsItemObj = False
+        #End If
+        Vars.Items(i) = Item
+    Else
+        Add Key, Item
+    End If
+End Property
+Public Property Set Item(ByRef Key As Variant, ByRef Item As Object)
+    Dim i As Long: i = GetIndex(Key)
+    If i > notFound Then
+        #If x64 Then
+            Vars.Meta(i) = Vars.Meta(i) Or isItemObjBit
+        #Else
+            Vars.Keys(i).IsItemObj = True
+        #End If
+        Set Vars.Items(i) = Item
+    Else
+        Add Key, Item
+    End If
+End Property
+
 #If TWINBASIC Then
 Public Sub IEnumVARIANT_Next(ByVal celt As Long _
                            , ByRef rgVar As Variant _
@@ -772,58 +828,6 @@ Private Function CountRemoved(ByVal upTo As Long) As Long
         CountRemoved = Vars.Count - Vars.UsedCount - CountRemoved
     End If
 End Function
-
-'Raises Error:
-'   -    9: invalid key (key is not associated with any element)
-'   -  450: 'Set' is missing when assigning an object
-'@DefaultMember
-Public Property Get Item(ByRef Key As Variant) As Variant
-Attribute Item.VB_UserMemId = 0
-'Attribute Item.VB_UserMemId = 0
-    Dim i As Long: i = GetIndex(Key)
-    '
-    'We raise error manually to avoid issue #14
-    'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
-    If i = notFound Then Err.Raise 9
-#If x64 Then
-    If Vars.Meta(i) And isItemObjBit Then
-#Else
-    If Vars.Keys(i).IsItemObj Then
-#End If
-        Set Item = Vars.Items(i)
-    Else
-        Item = Vars.Items(i)
-    End If
-End Property
-Public Property Let Item(ByRef Key As Variant, ByRef Item As Variant)
-    If IsObject(Item) Or (VarType(Item) = vbDataObject) Then
-        Err.Raise 450, TypeName(Me) & ".Item", "'Set' is required"
-    End If
-    Dim i As Long: i = GetIndex(Key)
-    If i > notFound Then
-        #If x64 Then
-            Vars.Meta(i) = Vars.Meta(i) And keyBitMask
-        #Else
-            Vars.Keys(i).IsItemObj = False
-        #End If
-        Vars.Items(i) = Item
-    Else
-        Add Key, Item
-    End If
-End Property
-Public Property Set Item(ByRef Key As Variant, ByRef Item As Object)
-    Dim i As Long: i = GetIndex(Key)
-    If i > notFound Then
-        #If x64 Then
-            Vars.Meta(i) = Vars.Meta(i) Or isItemObjBit
-        #Else
-            Vars.Keys(i).IsItemObj = True
-        #End If
-        Set Vars.Items(i) = Item
-    Else
-        Add Key, Item
-    End If
-End Property
 
 'Raises Error:
 '   -    9: invalid index
@@ -1503,12 +1507,17 @@ Private Sub FixStackBugs(ByRef h As Globals)
     Const opNumNewEnum As Long = 7   'Dict interface derived from IDispatch
     Const opNumTerminate As Long = 4 'IClassModuleEvt derived from IUnknown
     Dim newEnumPtr As LongPtr
+    Dim itemGetPtr As LongPtr
     Dim terminatePtr As LongPtr
     '
     'NewEnum
     h.saP.pvData = Vars.Dealloc.ThisPtr 'Dictionary
     h.saP.pvData = Mem.RPtr(0) + ptrSize * opNumNewEnum
     newEnumPtr = Mem.RPtr(0)
+    '
+    'Item (Get)
+    h.saP.pvData = h.saP.pvData + ptrSize 'Next method after NewEnum
+    itemGetPtr = Mem.RPtr(0)
     '
     '_Terminate address
     h.saP.pvData = Vars.Dealloc.ThisPtr + LocalSize(Vars.Dealloc.ThisPtr) _
@@ -1517,6 +1526,7 @@ Private Sub FixStackBugs(ByRef h As Globals)
     terminatePtr = Mem.RPtr(0)
     '
     FixStackSize h, newEnumPtr, &H800  'From 16 to 2048 bytes
+    FixStackSize h, itemGetPtr, &H200  'From 18 to 512 bytes
     FixStackSize h, terminatePtr, &H18 'From 8 to 24 bytes
 End Sub
 Private Sub FixStackSize(ByRef h As Globals _
