@@ -1675,7 +1675,7 @@ Private Function DictEnum() As IUnknown
     CopyMemory vtbl(0), ByVal vtblptr, ptrSize * 7 'Copy original virtual table
     '
     CopyMemory vtbl(3), ByVal Vars.Dealloc.ThisPtr, ptrSize
-    CopyMemory vtbl(3), ByVal vtbl(3) + ptrSize * 8, ptrSize 'Replace 'Next'
+    CopyMemory vtbl(3), ByVal vtbl(3) + ptrSize * 11, ptrSize 'Replace 'Next'
     '
     'Swap original vTable with our own (5 out of 7 are still original functions)
     CopyMemory ByVal tempPtr, VarPtr(vtbl(0)), ptrSize
