@@ -38,6 +38,9 @@ This Dictionary does not require any DLL references or any kind of external libr
     - [Class virtual table](#class-virtual-table)
     - [Class method code](#class-method-code)
   - [Stack Bug Fixes](#stack-bug-fixes)
+    - [NewEnum stack fix](#newenum-stack-fix)
+    - [Class_Terminate stack fix](#class_terminate-stack-fix)
+    - [Item (Get) stack fix](#item-get-stack-fix)
 ***
 
 ## Compatibility with ```Scripting.Dictionary```
@@ -971,5 +974,18 @@ This class simply adds addtional, unused space to the stack. This makes sure tha
 For a ```For Each``` call we cannot possibly know how big the previous stack frame is, so we add a large amount e.g. 2048 bytes. For the ```Class_Terminate``` call this is simpler because we know there are no arguments and no function return. In this implementation there are also no local variables. While the original needed size is only 8 bytes (for the instance pointer), we add 24 bytes to account for a ```Variant``` size which can get overwritten as seen in the [Class_Terminate](https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug) bug.
 
 The code for the fixes is [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/4b93590de56cec7e92bc1f741ee068d1e87e9527/src/Dictionary.cls#L1494-L1542). We find the enumerator function pointer because we strategically place it as the first method in the class (i.e. 8th method in the virtual table) and we find the ```_Terminate``` pointer by finding the 4th method in the virtual table of the ```IClassModuleEvt``` interface. Note that while we increase R12 register in the late-binding assembly called by ```IDispatch:::Invoke```, we must also make sure we decrease the stack size in the PCode Arguments Size which is always called (late or early).
+
+#### NewEnum stack fix
+
+To be continued..
+
+#### Class_Terminate stack fix
+
+To be continued..
+
+#### Item (Get) stack fix
+
+To be continued..
+
 
 
