@@ -1134,6 +1134,12 @@ Private Sub TestDefault2()
     For i = 1 To iterations
         v = w(1) 'Late bound Variant
     Next i
+    '
+    For i = 1 To iterations
+        v = d(1) 'Early bound
+        v = o(1) 'Late bound
+        v = w(1) 'Late bound Variant
+    Next i
 End Sub
 
 Private Sub TestNesting1()
@@ -1212,8 +1218,8 @@ Private Sub TestForEach2()
     Dim i As Long
     Dim v As Variant
     '
-    For i = 1 To 100000
-        For Each v In d
+    For i = 1 To 10000
+        For Each v In d 'Late-bound
         Next
     Next i
 End Sub
@@ -1222,11 +1228,17 @@ Private Sub TestForEach3()
     Dim d As New Dictionary
     Dim i As Long
     Dim c As New Collection
+    Dim v As Variant
     '
     d.Add 1, 1
     d.Add 2, 2
     For i = 1 To 1000
-        c.Add d.NewEnum
+        c.Add d.NewEnum 'Early-bound
+    Next i
+    For i = 1 To 1000   'Alternate
+        c.Add d.NewEnum 'Early-bound
+        For Each v In d 'Late-bound
+        Next
     Next i
     Set c = Nothing
 End Sub
