@@ -12,6 +12,8 @@ Private Type JustMyUDT
     dict As Dictionary
 End Type
 
+#Const x64StackIssues = ((Mac = 0) And Win64 And (TWINBASIC = 0))
+
 Private Const invalidCallErr As Long = 5
 Private Const unsupportedKeyErr As Long = invalidCallErr
 Private Const keyOrIndexNotFoundErr As Long = 9
@@ -1054,7 +1056,7 @@ Private Sub TestDictionarySelf()
 End Sub
 
 Private Sub TestDictionaryStackFixes()
-#If Win64 Then
+#If x64StackIssues Then
     TestTerminate1
     TestTerminate2
     TestTerminate3
@@ -1069,7 +1071,7 @@ Private Sub TestDictionaryStackFixes()
 #End If
 End Sub
 
-#If Win64 Then
+#If x64StackIssues Then
 'https://github.com/cristianbuse/VBA-FastDictionary/issues/10
 Private Sub TestTerminate1()
     Dim v As Variant
