@@ -123,6 +123,7 @@ Const MaxLoadFactor As Single = 0.5
 #Const Windows = (Mac = 0)
 #Const x64 = Win64
 #Const x32 = (x64 = 0) 'We don't care about x16
+#Const x64StackIssues = (Windows And x64 And (TWINBASIC = 0))
     
 #If x64 Then
     Const NullPtr As LongLong = 0^
@@ -211,6 +212,20 @@ Private Type SAFEARRAY_1D
     pvData As LongPtr
     rgsabound0 As SAFEARRAYBOUND
 End Type
+        
+#If x64StackIssues Then
+Private Enum CallType
+    earlyBound = 0
+    lateBound = 1
+End Enum
+Private Type StackTracker
+    argSizeInvokePtr As LongPtr
+    argSizePCodePtr As LongPtr
+    argSize(earlyBound To lateBound) As Integer
+    currentCallType As CallType
+    previousCallType As CallType
+End Type
+#End If
              
 'Data shared across all class instances
 Private Type Globals
@@ -230,6 +245,11 @@ Private Type Globals
     defPtrOffset As LongPtr
     nestingLevel As Long
     hasNestedPending As Boolean
+#If x64StackIssues Then
+    stItemGet As StackTracker
+    stNewEnum As StackTracker
+    stTerminate As StackTracker
+#End If
 End Type
 
 Private Enum DeepNestAction
@@ -307,12 +327,99 @@ Private Mem As MemoryAccessors
 'Cannot use ITypeInfo::AddressOfMember because it overrides some assembly bytes:
 'https://stackoverflow.com/questions/65507735/address-of-class-method-crash-on-x64
 
+'Do NOT delete the Optional dummy parameter. It was added to increase the
+' size of the assembly used for late-bound calls on x64. The asm is then
+' modified in such a way that 'currentCallType' is set appropriately
+' in the corresponding stack tracker. This allows correction of stack size
+
 '@Enumerator
-Public Function NewEnum() As IUnknown
+Public Function NewEnum(Optional ByVal dummyRegisterR8 As Long) As IUnknown
 Attribute NewEnum.VB_UserMemId = -4
 'Attribute NewEnum.VB_UserMemId = -4
+#If x64StackIssues Then
+    With Mem.Common(0)
+        If .stNewEnum.currentCallType <> .stNewEnum.previousCallType Then
+            .saI.pvData = .stNewEnum.argSizePCodePtr
+            Mem.RInt(0) = .stNewEnum.argSize(.stNewEnum.currentCallType)
+            .saI.pvData = .dPtr
+            .stNewEnum.previousCallType = .stNewEnum.currentCallType
+        End If
+        .stNewEnum.currentCallType = earlyBound
+    End With
+#End If
     Set NewEnum = DictEnum
 End Function
+
+'Item (Get) must be the second method so that it's virtual table position is known.
+'This is because we want to fix the x64 bug related to stack misalignment on late-binding
+'https://github.com/cristianbuse/VBA-FastDictionary/issues/16
+
+'The assembly for late-bound calls, implicit as default method or explicit,
+' is modified in such a way that 'currentCallType' is set appropriately
+' in the corresponding stack tracker. This allows correction of stack size
+
+'Raises Error:
+'   -    9: invalid key (key is not associated with any element)
+'   -  450: 'Set' is missing when assigning an object
+'@DefaultMember
+Public Property Get Item(ByRef Key As Variant) As Variant
+Attribute Item.VB_UserMemId = 0
+'Attribute Item.VB_UserMemId = 0
+#If x64StackIssues Then
+    With Mem.Common(0)
+        If .stItemGet.currentCallType <> .stItemGet.previousCallType Then
+            .saI.pvData = .stItemGet.argSizePCodePtr
+            Mem.RInt(0) = .stItemGet.argSize(.stItemGet.currentCallType)
+            .saI.pvData = .dPtr
+            .stItemGet.previousCallType = .stItemGet.currentCallType
+        End If
+        .stItemGet.currentCallType = earlyBound
+    End With
+#End If
+    Dim i As Long: i = GetIndex(Key)
+    '
+    'We raise error manually to avoid issue #14
+    'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
+    If i = notFound Then Err.Raise 9
+#If x64 Then
+    If Vars.Meta(i) And isItemObjBit Then
+#Else
+    If Vars.Keys(i).IsItemObj Then
+#End If
+        Set Item = Vars.Items(i)
+    Else
+        Item = Vars.Items(i)
+    End If
+End Property
+Public Property Let Item(ByRef Key As Variant, ByRef Item As Variant)
+    If IsObject(Item) Or (VarType(Item) = vbDataObject) Then
+        Err.Raise 450, TypeName(Me) & ".Item", "'Set' is required"
+    End If
+    Dim i As Long: i = GetIndex(Key)
+    If i > notFound Then
+        #If x64 Then
+            Vars.Meta(i) = Vars.Meta(i) And keyBitMask
+        #Else
+            Vars.Keys(i).IsItemObj = False
+        #End If
+        Vars.Items(i) = Item
+    Else
+        Add Key, Item
+    End If
+End Property
+Public Property Set Item(ByRef Key As Variant, ByRef Item As Object)
+    Dim i As Long: i = GetIndex(Key)
+    If i > notFound Then
+        #If x64 Then
+            Vars.Meta(i) = Vars.Meta(i) Or isItemObjBit
+        #Else
+            Vars.Keys(i).IsItemObj = True
+        #End If
+        Set Vars.Items(i) = Item
+    Else
+        Add Key, Item
+    End If
+End Property
 
 #If TWINBASIC Then
 Public Sub IEnumVARIANT_Next(ByVal celt As Long _
@@ -772,58 +879,6 @@ Private Function CountRemoved(ByVal upTo As Long) As Long
         CountRemoved = Vars.Count - Vars.UsedCount - CountRemoved
     End If
 End Function
-
-'Raises Error:
-'   -    9: invalid key (key is not associated with any element)
-'   -  450: 'Set' is missing when assigning an object
-'@DefaultMember
-Public Property Get Item(ByRef Key As Variant) As Variant
-Attribute Item.VB_UserMemId = 0
-'Attribute Item.VB_UserMemId = 0
-    Dim i As Long: i = GetIndex(Key)
-    '
-    'We raise error manually to avoid issue #14
-    'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
-    If i = notFound Then Err.Raise 9
-#If x64 Then
-    If Vars.Meta(i) And isItemObjBit Then
-#Else
-    If Vars.Keys(i).IsItemObj Then
-#End If
-        Set Item = Vars.Items(i)
-    Else
-        Item = Vars.Items(i)
-    End If
-End Property
-Public Property Let Item(ByRef Key As Variant, ByRef Item As Variant)
-    If IsObject(Item) Or (VarType(Item) = vbDataObject) Then
-        Err.Raise 450, TypeName(Me) & ".Item", "'Set' is required"
-    End If
-    Dim i As Long: i = GetIndex(Key)
-    If i > notFound Then
-        #If x64 Then
-            Vars.Meta(i) = Vars.Meta(i) And keyBitMask
-        #Else
-            Vars.Keys(i).IsItemObj = False
-        #End If
-        Vars.Items(i) = Item
-    Else
-        Add Key, Item
-    End If
-End Property
-Public Property Set Item(ByRef Key As Variant, ByRef Item As Object)
-    Dim i As Long: i = GetIndex(Key)
-    If i > notFound Then
-        #If x64 Then
-            Vars.Meta(i) = Vars.Meta(i) Or isItemObjBit
-        #Else
-            Vars.Keys(i).IsItemObj = True
-        #End If
-        Set Vars.Items(i) = Item
-    Else
-        Add Key, Item
-    End If
-End Property
 
 'Raises Error:
 '   -    9: invalid index
@@ -1380,7 +1435,11 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
             h.saP.pvData = VarPtr(c)
             Mem.RPtr(0) = VarPtr(h.sdl)
         End If
-        #If x64 And (TWINBASIC = 0) Then
+        #If x64StackIssues Then
+            'Init Integer Accessor sooner
+            h.saP.pvData = VarPtr(m) + ptrSize * 2
+            Mem.RPtr(0) = saPtrs(2)
+            '
             FixStackBugs h
         #End If
 #End If
@@ -1491,11 +1550,13 @@ Private Function SetTrue(ByRef b As Boolean) As Boolean
     SetTrue = True
 End Function
 
-#If Windows And x64 And (TWINBASIC = 0) Then
-'Increase stack frame size for 'NewEnum' & 'Class_Terminate' to avoid x64 bugs:
+#If x64StackIssues Then
+'Fix stack frame size for 'NewEnum', 'Class_Terminate' & 'Item (Get)' to avoid x64 bugs:
 'https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes
 'https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug
 'https://github.com/cristianbuse/VBA-FastDictionary/issues/10
+'https://github.com/cristianbuse/VBA-FastDictionary/issues/15
+'https://github.com/cristianbuse/VBA-FastDictionary/issues/16
 '
 'More details about the below fix at:
 'https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#x64-assembly
@@ -1503,6 +1564,7 @@ Private Sub FixStackBugs(ByRef h As Globals)
     Const opNumNewEnum As Long = 7   'Dict interface derived from IDispatch
     Const opNumTerminate As Long = 4 'IClassModuleEvt derived from IUnknown
     Dim newEnumPtr As LongPtr
+    Dim itemGetPtr As LongPtr
     Dim terminatePtr As LongPtr
     '
     'NewEnum
@@ -1510,34 +1572,77 @@ Private Sub FixStackBugs(ByRef h As Globals)
     h.saP.pvData = Mem.RPtr(0) + ptrSize * opNumNewEnum
     newEnumPtr = Mem.RPtr(0)
     '
+    'Item (Get)
+    h.saP.pvData = h.saP.pvData + ptrSize 'Next method after NewEnum
+    itemGetPtr = Mem.RPtr(0)
+    '
     '_Terminate address
     h.saP.pvData = Vars.Dealloc.ThisPtr + LocalSize(Vars.Dealloc.ThisPtr) _
                                         - ptrSize * 3 'IClassModuleEvt
     h.saP.pvData = Mem.RPtr(0) + ptrSize * opNumTerminate
     terminatePtr = Mem.RPtr(0)
     '
-    FixStackSize h, newEnumPtr, &H800  'From 16 to 2048 bytes
-    FixStackSize h, terminatePtr, &H18 'From 8 to 24 bytes
+    FixStackSize h, itemGetPtr, &H18, &H800, False, h.stItemGet
+    FixStackSize h, newEnumPtr, &H18, &H800, False, h.stNewEnum
+    FixStackSize h, terminatePtr, &H8, &H800, True, h.stTerminate
 End Sub
 Private Sub FixStackSize(ByRef h As Globals _
                        , ByVal funcPtr As LongPtr _
-                       , ByVal newSize As Integer)
-    Dim newSizePtr As LongPtr: newSizePtr = CLngPtr(newSize)
+                       , ByVal initialSize As Integer _
+                       , ByVal newSize As Integer _
+                       , ByVal isTerminate As Boolean _
+                       , ByRef st As StackTracker)
     'The bytes following the function address are called via IDispatch::Invoke
     '   which in turn call the early-binding PCode via a global asm wrapper
-    h.saP.pvData = funcPtr + &H15 'SUB R12, 0x08 / SUB R12, 0x10
-    If (Mem.RPtr(0) And &HFFFFFF^) = &HEC8149^ Then
-        h.saP.pvData = h.saP.pvData + 3
-        Mem.RPtr(0) = Mem.RPtr(0) And &HFFFFFFFFFFFF0000^ Or newSizePtr
-        '
-        'We also need to update the stack frame size for args in PCode
-        h.saP.pvData = funcPtr - 8
-        h.saP.pvData = Mem.RPtr(0) + 8 'Address of PCode
-        h.saP.pvData = Mem.RPtr(0) + 8 'Size info
-        '
-        'Lower 2 bytes represent size of stack needed for args
-        Mem.RPtr(0) = Mem.RPtr(0) And &HFFFFFFFFFFFF0000^ Or newSizePtr
+    h.saP.pvData = funcPtr + &H15 'SUB R12, 0x????
+    If (Mem.RPtr(0) And &HFFFFFF^) <> &HEC8149^ Then 'Not x64 architecture?
+        'Avoid accessing invalid memory later on
+        st.argSizeInvokePtr = VarPtr(st.currentCallType)
+        st.argSizePCodePtr = VarPtr(st.previousCallType)
+        Exit Sub
     End If
+    '
+    'Update size of aguments for 'invoked' asm i.e. H in 'SUB R12, 0xHHHH
+    st.argSizeInvokePtr = funcPtr + &H18
+    h.saI.pvData = st.argSizeInvokePtr
+    st.argSize(earlyBound) = Mem.RInt(0)
+    st.argSize(lateBound) = newSize
+    Mem.RInt(0) = newSize
+    '
+    'PCode Argument Size
+    h.saP.pvData = funcPtr - 8
+    h.saP.pvData = Mem.RPtr(0) + 8 'Address of PCode
+    st.argSizePCodePtr = Mem.RPtr(0) + 8
+    h.saI.pvData = st.argSizePCodePtr
+    '
+    Dim wasStateLost As Boolean: wasStateLost = (st.argSize(earlyBound) = newSize)
+    If wasStateLost Then
+        st.argSize(earlyBound) = Mem.RInt(0)
+        If st.argSize(earlyBound) = newSize Then 'Use defaults
+            st.argSize(earlyBound) = initialSize
+            Mem.RInt(0) = initialSize
+        End If
+    ElseIf st.argSize(earlyBound) <> Mem.RInt(0) Then
+        Err.Raise 5, , "Unexpected stack size for arguments"
+    End If
+    '
+    'https://github.com/cristianbuse/VBA-FastDictionary/blob/master
+    'See /Implementation.md#item-get-stack-fix
+    'See /Implementation.md#newenum-stack-fix
+    'See /Implementation.md#class_terminate-stack-fix
+    If isTerminate Then 'Size will be managed based on nesting level
+        Mem.RInt(0) = newSize
+    Else 'Size will be managed based on call type
+        h.saP.pvData = funcPtr + &H1C
+        Mem.RPtr(0) = &H24548949240C8949^
+        h.saP.pvData = h.saP.pvData + 8
+        Mem.RPtr(0) = &HB848102444894D08^
+        h.saP.pvData = h.saP.pvData + 8
+        Mem.RPtr(0) = VarPtr(st.currentCallType)
+        h.saP.pvData = h.saP.pvData + 8
+        Mem.RPtr(0) = Mem.RPtr(0) And &HFFFFFFFFFF000000^ Or &H100C6^
+    End If
+    h.saI.pvData = h.dPtr
 End Sub
 #End If
     
@@ -1762,6 +1867,16 @@ Private Sub Class_Terminate()
             Vars.DefInstance.ManageDeepNested Vars, delayNestedTermination
         End If
         '
+        #If x64StackIssues Then
+            If .nestingLevel = 1 Then
+                .saI.pvData = .stTerminate.argSizeInvokePtr
+                Mem.RInt(0) = .stTerminate.argSize(earlyBound)
+                .saI.pvData = .stTerminate.argSizePCodePtr
+                Mem.RInt(0) = .stTerminate.argSize(earlyBound)
+                .saI.pvData = .dPtr
+            End If
+        #End If
+        '
         'Nested Dictionaries must be terminated before we deallocate
         Erase Vars.Keys
         Erase Vars.Items
@@ -1770,6 +1885,13 @@ Private Sub Class_Terminate()
             Do While .hasNestedPending
                 Vars.DefInstance.ManageDeepNested Vars, clearNestedDelayed
             Loop
+            #If x64StackIssues Then
+                .saI.pvData = .stTerminate.argSizeInvokePtr
+                Mem.RInt(0) = .stTerminate.argSize(lateBound)
+                .saI.pvData = .stTerminate.argSizePCodePtr
+                Mem.RInt(0) = .stTerminate.argSize(lateBound)
+                .saI.pvData = .dPtr
+            #End If
         End If
         '
         'Cache this instance inside the global instance and destroy later
@@ -1906,5 +2028,16 @@ End Sub
 #If DEBUG_MODE Then
 Public Property Get LastCreatedInstancePtr() As LongPtr
     LastCreatedInstancePtr = Mem.Common(0).lastInstancePtr
+End Property
+Public Property Get InstanceCount() As Long
+    With Mem.Common(0)
+        Dim ptr As LongPtr: ptr = .lastInstancePtr
+        Do While ptr <> NullPtr
+            .saP.pvData = ptr + ptrSize
+            ptr = Mem.RPtr(0)
+            InstanceCount = InstanceCount + 1
+        Loop
+        .saP.pvData = .dPtr
+    End With
 End Property
 #End If

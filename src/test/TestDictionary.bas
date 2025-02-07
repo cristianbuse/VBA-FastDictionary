@@ -8,6 +8,10 @@ Option Private Module
     End Enum
 #End If
 
+Private Type JustMyUDT
+    dict As Dictionary
+End Type
+
 Private Const invalidCallErr As Long = 5
 Private Const unsupportedKeyErr As Long = invalidCallErr
 Private Const keyOrIndexNotFoundErr As Long = 9
@@ -20,6 +24,7 @@ Public Sub RunAllDictionaryTests()
     TestDictionaryAllowDuplicateKeys
     TestDictionaryCompare
     TestDictionaryCount
+    TestDictionaryDealloc
     TestDictionaryExists
     TestDictionaryFactory
     TestDictionaryHashVal
@@ -36,6 +41,7 @@ Public Sub RunAllDictionaryTests()
     TestDictionaryRemove
     TestDictionaryRemoveAll
     TestDictionarySelf
+    TestDictionaryStackFixes
     Debug.Print "Finished running tests at " & Now()
 End Sub
 
@@ -192,6 +198,22 @@ Private Sub TestDictionaryCount()
     Debug.Assert d.Count = 0
 End Sub
 
+Private Sub TestDictionaryDealloc()
+    Dim i As Long
+    Dim d() As Dictionary
+    Const n As Long = 30000
+    ReDim d(1 To n) As Dictionary
+    '
+    For i = 1 To n
+        If i = n \ 2 Then Set Dictionary = d(n \ 4)
+        Set d(i) = New Dictionary
+        If i Mod 7 = 0 Then Set d(i) = New Dictionary
+    Next i
+    For i = 1 To n / 2
+        Set d(Rnd() * i + 1) = Nothing
+    Next i
+End Sub
+
 Private Sub TestDictionaryExists()
     Dim d As New Dictionary
     Dim c As New Collection
@@ -236,23 +258,23 @@ Private Sub TestDictionaryExists()
 End Sub
 
 '@Description("IEEE754 +inf")
-Public Property Get PosInf() As Double
+Private Property Get PosInf() As Double
     On Error Resume Next
     PosInf = 1 / 0
     On Error GoTo 0
 End Property
 '@Description("IEEE754 signaling NaN (sNaN)")
-Public Property Get SNaN() As Double
+Private Property Get SNaN() As Double
     On Error Resume Next
     SNaN = 0 / 0
     On Error GoTo 0
 End Property
 '@Description("IEEE754 -inf")
-Public Property Get NegInf() As Double
+Private Property Get NegInf() As Double
     NegInf = -PosInf
 End Property
 '@Description("IEEE754 quiet NaN (qNaN)")
-Public Property Get QNaN() As Double
+Private Property Get QNaN() As Double
     QNaN = -SNaN
 End Property
 
@@ -1030,3 +1052,194 @@ Private Sub TestDictionarySelf()
     Debug.Assert d.Self Is d
     Debug.Assert Dictionary.Self Is Dictionary
 End Sub
+
+Private Sub TestDictionaryStackFixes()
+#If Win64 Then
+    TestTerminate1
+    TestTerminate2
+    TestTerminate3
+    TestDefault1
+    TestDefault2
+    TestNesting1
+    TestNesting2
+    TestNesting3
+    TestForEach1
+    TestForEach2
+    TestForEach3
+#End If
+End Sub
+
+#If Win64 Then
+'https://github.com/cristianbuse/VBA-FastDictionary/issues/10
+Private Sub TestTerminate1()
+    Dim v As Variant
+    For Each v In ReturnVariantDict.Keys
+    Next v
+End Sub
+Private Function ReturnVariantDict() As Variant
+    Set ReturnVariantDict = New Dictionary
+End Function
+
+'https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug
+Private Sub TestTerminate2()
+    If Falsee(New Dictionary) Then
+        Err.Raise 5, , "This shouldn't happen"
+    End If
+End Sub
+Private Function Falsee(dict As Variant) As Boolean
+    Falsee = False
+End Function
+
+'https://github.com/cristianbuse/VBA-FastDictionary/issues/15
+Private Sub TestTerminate3()
+    Dim i As Long
+    For i = 1 To 10
+        TestUDTCrash
+    Next i
+End Sub
+Private Sub TestUDTCrash()
+    Static myUDT As JustMyUDT
+    Dim u As JustMyUDT
+    myUDT = u 'Forces call to Class_Terminate
+    Set myUDT.dict = New Dictionary
+End Sub
+
+'https://github.com/cristianbuse/VBA-FastDictionary/issues/16
+Private Sub TestDefault1()
+    Dim v As Variant: Set v = New Dictionary
+    Set v(0) = New Dictionary
+    v(0).Add "test", "test"
+End Sub
+
+Private Sub TestDefault2()
+    Dim d As New Dictionary
+    Dim i As Long
+    Dim v As Variant
+    Dim w As Variant
+    Dim o As Object
+    Const iterations As Long = 10000
+    '
+    d.Add 1, 1
+    d.Add 2, 2
+    For i = 1 To iterations
+        v = d(1) 'Early bound
+    Next i
+    '
+    Set o = d
+    For i = 1 To iterations
+        v = o(1) 'Late bound
+    Next i
+    '
+    Set w = d
+    For i = 1 To iterations
+        v = w(1) 'Late bound Variant
+    Next i
+    '
+    For i = 1 To iterations
+        v = d(1) 'Early bound
+        v = o(1) 'Late bound
+        v = w(1) 'Late bound Variant
+    Next i
+End Sub
+
+Private Sub TestNesting1()
+    Dim d As Dictionary
+    Dim i As Long
+    Dim t As Variant
+    Const nestingDepth As Long = 5000
+    '
+    Set d = New Dictionary
+    Set t = d
+    Do While i < nestingDepth
+        t.Add 1, New Dictionary
+        t.Add 2, New Dictionary
+        i = i + 1
+        Set t = t.Item(1) 'To test late-bind on Variant
+    Loop
+End Sub
+
+Private Sub TestNesting2()
+    Dim d As Dictionary
+    Dim i As Long
+    Dim t As Object
+    Const nestingDepth As Long = 5000
+    '
+    Set d = New Dictionary
+    Set t = d
+    Do While i < nestingDepth
+        t.Add 1, New Dictionary
+        t.Add 2, New Dictionary
+        i = i + 1
+        Set t = t.Item(1) 'To test late-bind on Object
+    Loop
+End Sub
+
+Private Sub TestNesting3()
+    Dim d As Dictionary
+    Dim i As Long
+    Dim t As Dictionary
+    Const nestingDepth As Long = 5000
+    '
+    Set d = New Dictionary
+    Set t = d
+    Do While i < nestingDepth
+        t.Add 1, New Dictionary
+        t.Add 2, New Dictionary
+        i = i + 1
+        Set t = t.Item(1) 'To test early-bind
+    Loop
+End Sub
+
+'https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes
+Private Sub TestForEach1()
+    Dim d As Dictionary: Set d = New Dictionary
+    d.Add 1, 1
+    d.Add 2, 2
+    ShowBug d
+End Sub
+Private Sub ShowBug(ByRef d As Dictionary)
+    Dim ptr0 As LongPtr, ptr1 As LongPtr, ptr2 As LongPtr
+    Dim ptr3 As LongPtr, ptr4 As LongPtr, ptr5 As LongPtr
+    Dim ptr6 As LongPtr, ptr7 As LongPtr, ptr8 As LongPtr
+    Dim v As Variant
+    '
+    On Error Resume Next
+    For Each v In d
+    Next v
+    On Error GoTo 0
+    '
+    Debug.Assert (ptr0 = 0) And (ptr1 = 0) And (ptr2 = 0) _
+             And (ptr3 = 0) And (ptr4 = 0) And (ptr5 = 0) _
+             And (ptr6 = 0) And (ptr7 = 0) And (ptr8 = 0)
+End Sub
+
+Private Sub TestForEach2()
+    Dim d As New Dictionary
+    Dim i As Long
+    Dim v As Variant
+    '
+    For i = 1 To 10000
+        For Each v In d 'Late-bound
+        Next
+    Next i
+End Sub
+
+Private Sub TestForEach3()
+    Dim d As New Dictionary
+    Dim i As Long
+    Dim c As New Collection
+    Dim v As Variant
+    '
+    d.Add 1, 1
+    d.Add 2, 2
+    For i = 1 To 1000
+        c.Add d.NewEnum 'Early-bound
+    Next i
+    For i = 1 To 1000   'Alternate
+        c.Add d.NewEnum 'Early-bound
+        For Each v In d 'Late-bound
+        Next
+    Next i
+    Set c = Nothing
+End Sub
+#End If
