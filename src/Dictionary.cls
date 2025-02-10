@@ -1857,7 +1857,7 @@ Private Sub Class_Terminate()
         Set Vars.Enums.enumsColl = Nothing
         '
         'Avoid 'Out of stack space' caused by too many nested _Terminate calls
-        Const maxNestingBeforeDelay As Long = 256
+        Const maxNestingBeforeDelay As Long = 128
         If .nestingLevel > maxNestingBeforeDelay Then
             Vars.DefInstance.ManageDeepNested Vars, delayNestedTermination
         End If
