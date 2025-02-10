@@ -1615,15 +1615,10 @@ Private Sub FixStackSize(ByRef h As Globals _
     st.argSizePCodePtr = Mem.RPtr(0) + 8
     h.saI.pvData = st.argSizePCodePtr
     '
-    Dim wasStateLost As Boolean: wasStateLost = (st.argSize(earlyBound) = newSize)
-    If wasStateLost Then
-        st.argSize(earlyBound) = Mem.RInt(0)
-        If st.argSize(earlyBound) = newSize Then 'Use defaults
-            st.argSize(earlyBound) = initialSize
-            Mem.RInt(0) = initialSize
-        End If
-    ElseIf st.argSize(earlyBound) <> Mem.RInt(0) Then
-        Err.Raise 5, , "Unexpected stack size for arguments"
+    If st.argSize(earlyBound) = newSize Then st.argSize(earlyBound) = Mem.RInt(0)
+    If st.argSize(earlyBound) = newSize Then 'Use defaults
+        st.argSize(earlyBound) = initialSize
+        Mem.RInt(0) = initialSize
     End If
     '
     'https://github.com/cristianbuse/VBA-FastDictionary/blob/master
