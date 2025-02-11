@@ -224,6 +224,8 @@ Private Type StackTracker
     argSize(earlyBound To lateBound) As Integer
     currentCallType As CallType
     previousCallType As CallType
+    callTypeAddr As LongPtr
+    callTypePtr As LongPtr
 End Type
 #End If
              
@@ -1469,9 +1471,7 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
     '
     If prevPtr = NullPtr Then 'Can only be def instance
         h.lastInstancePtr = v.Dealloc.ThisPtr
-        h.saP.pvData = h.dPtr
-        v.IsInitialized = True
-        Exit Sub
+        GoTo Initialized
     End If
     '
     'In case user modified the global instance e.g. Set Dictionary = Nothing
@@ -1536,6 +1536,10 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
     h.saP.pvData = prevPtr + h.nextPtrOffset
     Mem.RPtr(0) = v.Dealloc.ThisPtr
 #End If
+    '
+Initialized:
+    h.saP.pvData = h.stItemGet.callTypeAddr
+    If Mem.RPtr(0) <> h.stItemGet.callTypePtr Then FixStackBugs h
     '
     h.saP.pvData = h.dPtr
     v.IsInitialized = True
@@ -1629,13 +1633,21 @@ Private Sub FixStackSize(ByRef h As Globals _
         Mem.RInt(0) = newSize
     Else 'Size will be managed based on call type
         h.saP.pvData = funcPtr + &H1C
+        h.saP.rgsabound0.cElements = 4
+        '
+        st.callTypeAddr = h.saP.pvData + ptrSize * 2
+        st.callTypePtr = VarPtr(st.currentCallType)
+        '
+        '49890C24     ;MOV QWORD PTR [R12],RCX
+        '49895424 08  ;MOV QWORD PTR [R12+08],RDX
+        '4D894424 10  ;MOV QWORD PTR [R12+10],R8
+        '48B8 0x...   ;MOV RAX,0x...
+        'C60001       ;MOV BYTE PTR [RAX],01
         Mem.RPtr(0) = &H24548949240C8949^
-        h.saP.pvData = h.saP.pvData + 8
-        Mem.RPtr(0) = &HB848102444894D08^
-        h.saP.pvData = h.saP.pvData + 8
-        Mem.RPtr(0) = VarPtr(st.currentCallType)
-        h.saP.pvData = h.saP.pvData + 8
-        Mem.RPtr(0) = Mem.RPtr(0) And &HFFFFFFFFFF000000^ Or &H100C6^
+        Mem.RPtr(1) = &HB848102444894D08^
+        Mem.RPtr(2) = st.callTypePtr
+        Mem.RPtr(3) = Mem.RPtr(3) And &HFFFFFFFFFF000000^ Or &H100C6^
+        h.saP.rgsabound0.cElements = 1
     End If
     h.saI.pvData = h.dPtr
 End Sub
