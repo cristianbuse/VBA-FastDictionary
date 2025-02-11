@@ -1538,8 +1538,10 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
 #End If
     '
 Initialized:
+#If x64StackIssues Then
     h.saP.pvData = h.stItemGet.callTypeAddr
     If Mem.RPtr(0) <> h.stItemGet.callTypePtr Then FixStackBugs h
+#End If
     '
     h.saP.pvData = h.dPtr
     v.IsInitialized = True
