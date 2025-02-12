@@ -37,10 +37,11 @@ This Dictionary does not require any DLL references or any kind of external libr
   - [VBA x64 class method call mechanism](#vba-class-method-call-mechanism)
     - [Class virtual table](#class-virtual-table)
     - [Class method code](#class-method-code)
+    - [Class method call](#class-method-call)
   - [Stack Bug Fixes](#stack-bug-fixes)
+    - [Item (Get) stack fix](#item-get-stack-fix)
     - [NewEnum stack fix](#newenum-stack-fix)
     - [Class_Terminate stack fix](#class_terminate-stack-fix)
-    - [Item (Get) stack fix](#item-get-stack-fix)
 ***
 
 ## Compatibility with ```Scripting.Dictionary```
@@ -931,7 +932,9 @@ C7458800000000        ; MOV DWORD PTR [RBP-78],00000000  ; Saves 4-Byte Int 0x0 
 ; ...
 ```
 
-In other words, we can heavily simplify a class method call to this:
+#### Class method call
+
+Based on the above, we can heavily simplify a class method call to this:
 - early-binded call
   - Push arguments to stack
   - Read Temp pointer at Function pointer - 8
@@ -968,24 +971,97 @@ In other words, we can heavily simplify a class method call to this:
 
 ### Stack Bug fixes
 
-Unfortunately, for the above mentioned bugs with [For Each](https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes) and [Class_Terminate](https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug), VBA does not increase the stack size correctly and final code ends up overwriting values that are part of the previous stack frame.
+Unfortunately, for the above mentioned bugs with [For Each](https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes) and [Class_Terminate](https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug), VBA does not increase the stack size correctly and code in the last called method ends up overwriting values that are part of the previous stack frame. **This stack misalignment issue only happens via late-bound calls**.
 
-This class simply adds addtional, unused space to the stack. This makes sure that values in the previous stack frame are not overwritten in these special circumstances.
-For a ```For Each``` call we cannot possibly know how big the previous stack frame is, so we add a large amount e.g. 2048 bytes. For the ```Class_Terminate``` call this is simpler because we know there are no arguments and no function return. In this implementation there are also no local variables. While the original needed size is only 8 bytes (for the instance pointer), we add 24 bytes to account for a ```Variant``` size which can get overwritten as seen in the [Class_Terminate](https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug) bug.
+This class simply adds addtional, unused space to the stack. This makes sure that values in the previous stack frame are not overwritten when the bugs occur. We cannot possibly know how big the previous stack frame is, so we artificially increase the stack frame by adding a large amount e.g. 2048 bytes, of which most won't be used in normal circumstances.
 
-The code for the fixes is [this](https://github.com/cristianbuse/VBA-FastDictionary/blob/4b93590de56cec7e92bc1f741ee068d1e87e9527/src/Dictionary.cls#L1494-L1542). We find the enumerator function pointer because we strategically place it as the first method in the class (i.e. 8th method in the virtual table) and we find the ```_Terminate``` pointer by finding the 4th method in the virtual table of the ```IClassModuleEvt``` interface. Note that while we increase R12 register in the late-binding assembly called by ```IDispatch:::Invoke```, we must also make sure we decrease the stack size in the PCode Arguments Size which is always called (late or early).
+The strategy applied to ```Class_Terminate``` is different from the one applied to ```NewEnum``` and ```Item``` (Get). This is because ```Class_Terminate``` is ```Private``` and the call coming from ```IClassModuleEvt::_Terminate``` is always calling the late-bound assembly bytes that in turn call the global wrapper that calls into PCode. However, for the other methods, the call can be made directly to PCode since they are ```Public```, and so the fix must be dynamic based on call type.
 
-#### NewEnum stack fix
-
-To be continued..
-
-#### Class_Terminate stack fix
-
-To be continued..
+Stack fix code [here](https://github.com/cristianbuse/VBA-FastDictionary/blob/b019abe22fe93acd488c642c62509416aceadc75/src/Dictionary.cls#L1559-L1656).
 
 #### Item (Get) stack fix
 
-To be continued..
+As seen in issue [#16](https://github.com/cristianbuse/VBA-FastDictionary/issues/16), if a class instance is stored in a variable of type ```Variant```, and the call is made implicitly to the default method, then the previous stack frame is not "detected" properly and it's being overwritten from the default method.
 
+Minimal example would be:
+```VBA
+Public Function TestDictionary()
+    Dim v As Variant: Set v = New Dictionary
+    Set v(0) = New Dictionary
+    v(0).Add Empty, "test" 'This will either cause a crash or pass an 'Unsupported variant type' to the 'Add' method
+End Function
+```
+Please note this issue **can be reproduced with any VBA class** as seen in the above mentioned issue, not just with ```Dictionary```.
 
+A more simplified view of a call to ```Item```, compared to [Class method call](#class-method-call), can be written as:
+- early-bound
+  - arguments are correctly pushed to stack
+  - PCode is run
+  - PCode argument size is popped from the stack when PCode finishes execution
+- late-bound
+  - assembly code increases R12 register by the size of the arguments
+  - global wrapper is called which creates a new stack frame and takes R12 into account
+  - PCode is run
+  - PCode argument size is popped from the stack when PCode finishes execution
 
+If we are to fix the late-bound calls by increasing the size of R12 with additional unused space, then we must also increase the PCode argument size if we don't want to quickly run out of stack space. E.g. Push 2048 bytes then also pop 2048 bytes. The problem is that we cannot do this just one time and be done with it, because an early-bound call would push the normal argument size to the stack and then it would remove a larger amount which would lead to a stack corruption and a crash. The solution is to "track" the call type and then adjust accordingly the amount being popped from the stack.
+
+The following code is the automatically generated assmebly for ```Item``` (Get):
+```assembly
+66490F6EEC           ; MOVQ XMM5,R12                    ; Saves R12 value in lower 8 bytes of XMM5    
+48B8B873F4FFFC7F0000 ; MOV RAX,00007FFCFFF473B8         ; Copies literal value into RAX - this value seems to always be the same
+488B00               ; MOV RAX,QWORD PTR [RAX]          ; Reads memory value pointed by RAX into RAX (Dereference)
+4C8B20               ; MOV R12,QWORD PTR [RAX]          ; Reads memory value pointed by RAX into R12 (Dereference)
+4981EC18000000       ; SUB R12,0000000000000018         ; Adds space (negative) for 3 pointers to the stack, one for instance pointer, one for function return and one for the argument
+498BC4               ; MOV RAX,R12                      ; Saves R12 value into RAX - seems useless because RAX gets overwritten just below in the second last instruction
+49898C2400000000     ; MOV QWORD PTR [R12+00000000],RCX ; Saves RCX value at the address pointed by R12
+4989942408000000     ; MOV QWORD PTR [R12+00000008],RDX ; Saves RDX value at the address pointed by R12 + 0x8
+4D89842410000000     ; MOV QWORD PTR [R12+00000010],R8  ; Saves R8 value at the address pointed by R12 + 0x10
+48BAC87B6BADCB020000 ; MOV RDX,000002CBAD6B7BC8         ; Pushes literal value to RDX. The value matches the value at -8 offset from function pointer
+48B88A1EEDFFFC7F0000 ; MOV RAX,00007FFCFFED1E8A         ; Pushes literal value to RAX. This is jumped to in the next instruction and is the same value for all methods in the class i.e. global wrapper
+FFE0                 ; JMP RAX                          ; Jumps to asm pointer by RAX as mentioned above. This wrapper will use the address passed in RDX to call PCode
+```
+
+Notice that the ```MOV RAX,R12``` is useless because ```RAX``` gets overwritten in the second last instruction. Also, the offsets to ```R12``` don't need to be 4-Byte (DWORD). This can be updated like this:
+```assembly
+66490F6EEC           ; MOVQ XMM5,R12              ; Same as original
+48B8B873F4FFFC7F0000 ; MOV RAX,00007FFCFFF473B8   ; Same as original
+488B00               ; MOV RAX,QWORD PTR [RAX]    ; Same as original
+4C8B20               ; MOV R12,QWORD PTR [RAX]    ; Same as original
+;-------------------------------------------------------------------
+4981EC00080000       ; SUB R12,0000000000000800   ; Replace 0x18 (24 bytes) with 0x800 (2048 bytes)
+                                                  ; Save 3 bytes by removing 'MOV RAX,R12'
+49890C24             ; MOV QWORD PTR [R12],RCX    ; Same as 'MOV QWORD PTR [R12+00000000],RCX' but written with 4 bytes instead of 8 i.e. save 4 bytes
+4989542408           ; MOV QWORD PTR [R12+08],RDX ; Same as 'MOV QWORD PTR [R12+00000008],RDX' but written with 5 bytes instead of 8 i.e. save 3 bytes
+4D89442410           ; MOV QWORD PTR [R12+10],R8  ; Same as 'MOV QWORD PTR [R12+00000010],R8'  but written with 5 bytes instead of 8 i.e. save 3 bytes
+                                                  ; We now have 3 + 4 + 3 + 3 = 13 freed bytes that we can use freely
+48B80495888DCB020000 ; MOV RAX,000002CB8D889504   ; Add address of the global variable that will hold the call type to RAX (10 bytes)
+C60001               ; MOV BYTE PTR [RAX],01      ; Write byte value 0x01 to the variable that holds call type (3 bytes)
+;-------------------------------------------------------------------
+48BAC87B6BADCB020000 ; MOV RDX,000002CBAD6B7BC8   ; Same as original
+48B88A1EEDFFFC7F0000 ; MOV RAX,00007FFCFFED1E8A   ; Same as original
+FFE0                 ; JMP RAX                    ; Same as original
+```
+
+In short, we get the late-bound assembly to write a ```Byte``` value of ```1``` to a global variable that will indicate the call type. Since VBA uses little-endian memory layout, the variable can be of type ```Long``` (Enum actually).
+The asm is updated [here](https://github.com/cristianbuse/VBA-FastDictionary/blob/b019abe22fe93acd488c642c62509416aceadc75/src/Dictionary.cls#L1636-L1651). This is done while preserving the exact number of assembly bytes with no loss of original functionality.
+
+With the above in place, each call to ```Item``` (Get) can access the variable that holds the call type and can adjust the correct stack size that needs to be popped. Code [here](https://github.com/cristianbuse/VBA-FastDictionary/blob/b019abe22fe93acd488c642c62509416aceadc75/src/Dictionary.cls#L370-L380).
+
+We find the ```Item``` (Get) function pointer because we strategically place it as the second method in the class (i.e. 9th method in the virtual table), immediately after ```NewEnum```.
+
+#### NewEnum stack fix
+
+The [For Each](https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes) bug usually leads to a crash. [Previous solution](https://github.com/cristianbuse/VBA-FastDictionary/blob/4b93590de56cec7e92bc1f741ee068d1e87e9527/src/Dictionary.cls#L1494-L1542) was simply solving the late-bound calls by artificially increasing stack size for ```NewEnum``` both in the late-bound asm and in the PCode pop, once. However, with the additon of [Item (Get) stack fix](#item-get-stack-fix), the solution was upgraded to account for early-bound calls to ```NewEnum``` and so the stack size to be popped is also [dynamically adjusted](https://github.com/cristianbuse/VBA-FastDictionary/blob/b019abe22fe93acd488c642c62509416aceadc75/src/Dictionary.cls#L341-L351) in the exact way as ```Item``` (Get).
+
+We find the enumerator function pointer because we strategically place it as the first method in the class (i.e. 8th method in the virtual table).
+
+#### Class_Terminate stack fix
+
+Besides the well-known [Class_Terminate](https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug) bug, there are a few other scenarios that were raised in issues [#10](https://github.com/cristianbuse/VBA-FastDictionary/issues/10) and [#15](https://github.com/cristianbuse/VBA-FastDictionary/issues/15), and they are all related to the same stack misalignment.
+
+The solution for ```Class_Terminate``` is simpler because we know there are no arguments, no function return, no local variables and the calls are always made via the late-bound assembly. However, it is not as simple as increasing both the ```R12``` register size and the argument size for PCode, because this leads to an 'Out of stack space' issue as seen in [#11](https://github.com/cristianbuse/VBA-FastDictionary/issues/11), when lots of instances are terminated from within the same stack frame e.g. in a loop or when a parent collection/container is terminated.
+
+While the first call to ```Class_Terminate``` should have a larger stack frame to avoid the bug, all subsequent nested calls should have the original size. Tracking the nesting level was done anyway for managed nesting deallocation. So, we use the nesting level to adjust the stack size as seen [here](https://github.com/cristianbuse/VBA-FastDictionary/blob/b019abe22fe93acd488c642c62509416aceadc75/src/Dictionary.cls#L1879-L1903).
+
+We find the ```_Terminate``` pointer by finding the 4th method in the virtual table of the ```IClassModuleEvt``` interface as seen [here](https://github.com/cristianbuse/VBA-FastDictionary/blob/b019abe22fe93acd488c642c62509416aceadc75/src/Dictionary.cls#L1585-L1589).
