@@ -160,16 +160,16 @@ We can see in the above code that:
 - when comparing ```Empty``` to 0 (zero) they are considered equal
 - when comparing 0 (zero) to ```""``` (or ```vbNullString```) they are NOT considered equal
 
-This is the standard behaviour when comparing Variants in VBA, clearly outlined [here](https://learn.microsoft.com/en-us/office/vba/language/reference/user-interface-help/comparison-operators#remarks). However, for the Scripting.Dictinary this yields different results depending on the order these special values are added to the dictionary.
+This is the standard behaviour when comparing Variants in VBA, clearly outlined [here](https://learn.microsoft.com/en-us/office/vba/language/reference/user-interface-help/comparison-operators#remarks). However, for the Scripting.Dictionary this yields different results depending on the order these special values are added to the dictionary.
 
 To avoid this unfortunate and misleading behaviour, this Dictionary distinguishes between these values and allows all 3 at the same time. The following code is valid when using this Dictionary:
 ```VBA
 dict("") = 1
 dict(Empty) = 2
 dict(0) = 3
-debug.print dict("") '1
-debug.print dict(Empty) '2
-debug.print dict(0) '3
+Debug.Print dict("") '1
+Debug.Print dict(Empty) '2
+Debug.Print dict(0) '3
 ```
 
 ## Hashing
@@ -371,7 +371,7 @@ However, if the value is not set back to the original 1201 then a crash will occ
 ##### Scripting.Dictionary conclusions
 
 Based on the above examples, we can now conclude the following:
-- in case of a state loss, using a real Scripting.Dictionary instance for hashing would lead to a crash if we change the hash size to anything else than 1201. Please note ```hashTablePtr``` cannot be changed without leading to a crash, or at best, a memory leak. So, we use a fake instance - see [Faking a Scripting.Dictionary instance](#faking-a-scriptingdictionary-instance) below
+- in case of a state loss, using a real Scripting.Dictionary instance for hashing will lead to a crash if we change the hash size to anything else than 1201. Please note ```hashTablePtr``` cannot be changed without leading to a crash, or at best, a memory leak. So, we use a fake instance - see [Faking a Scripting.Dictionary instance](#faking-a-scriptingdictionary-instance) below
 - the Scripting.Dictionary never resizes its hash table beyond 1201 which explains the poor performance for more than 32k items even for text keys as seen [here](benchmarking/result_screenshots/add_text_(len_17-23_binary_compare_unicode)_win_vba7_x64.png). There are so many hash collisions that the linear search simply degrades performance
 - the Scripting.Dictionary always applies the ```Mod``` operator before returning a hash value and for that, it must read the ```hashTableSize``` (1201 by default) from the heap. This causes real speed problems when spawning many Scripting.Dictionary instances even if each instance has only a few items. See [Scripting.Dictionary heap issue](#scriptingdictionary-heap-issue) below for more details
 
@@ -860,7 +860,7 @@ FFE0                   ; JMP RAX                          ; Jumps to asm pointer
 ; ...
 
 
-; Typical assembly for a class Sub with no aruments
+; Typical assembly for a class Sub with no arguments
 ;-------------------------------------------------------------------------------
 66490F6EEC             ; MOVQ XMM5,R12                      
 48B8 987307FAFA7F0000  ; MOV RAX,00007FFAFA077398         
@@ -973,7 +973,7 @@ Based on the above, we can heavily simplify a class method call to this:
 
 Unfortunately, for the above mentioned bugs with [For Each](https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes) and [Class_Terminate](https://stackoverflow.com/questions/65041832/vba-takes-wrong-branch-at-if-statement-severe-compiler-bug), VBA does not increase the stack size correctly and code in the last called method ends up overwriting values that are part of the previous stack frame. **This stack misalignment issue only happens via late-bound calls**.
 
-This class simply adds addtional, unused space to the stack. This makes sure that values in the previous stack frame are not overwritten when the bugs occur. We cannot possibly know how big the previous stack frame is, so we artificially increase the stack frame by adding a large amount e.g. 2048 bytes, of which most won't be used in normal circumstances.
+This class simply adds additional, unused space to the stack. This makes sure that values in the previous stack frame are not overwritten when the bugs occur. We cannot possibly know how big the previous stack frame is, so we artificially increase the stack frame by adding a large amount e.g. 2048 bytes, of which most won't be used in normal circumstances.
 
 The strategy applied to ```Class_Terminate``` is different from the one applied to ```NewEnum``` and ```Item``` (Get). This is because ```Class_Terminate``` is ```Private``` and the call coming from ```IClassModuleEvt::_Terminate``` is always calling the late-bound assembly bytes that in turn call the global wrapper that calls into PCode. However, for the other methods, the call can be made directly to PCode since they are ```Public```, and so the fix must be dynamic based on call type.
 
@@ -1006,7 +1006,7 @@ A more simplified view of a call to ```Item```, compared to [Class method call](
 
 If we are to fix the late-bound calls by increasing the size of R12 with additional unused space, then we must also increase the PCode argument size if we don't want to quickly run out of stack space. E.g. Push 2048 bytes then also pop 2048 bytes. The problem is that we cannot do this just one time and be done with it, because an early-bound call would push the normal argument size to the stack and then it would remove a larger amount which would lead to a stack corruption and a crash. The solution is to "track" the call type and then adjust accordingly the amount being popped from the stack.
 
-The following code is the automatically generated assmebly for ```Item``` (Get):
+The following code is the automatically generated assembly for ```Item``` (Get):
 ```assembly
 66490F6EEC           ; MOVQ XMM5,R12                    ; Saves R12 value in lower 8 bytes of XMM5    
 48B8B873F4FFFC7F0000 ; MOV RAX,00007FFCFFF473B8         ; Copies literal value into RAX - this value seems to always be the same
@@ -1052,7 +1052,7 @@ We find the ```Item``` (Get) function pointer because we strategically place it 
 
 #### NewEnum stack fix
 
-The [For Each](https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes) bug usually leads to a crash. [Previous solution](https://github.com/cristianbuse/VBA-FastDictionary/blob/4b93590de56cec7e92bc1f741ee068d1e87e9527/src/Dictionary.cls#L1494-L1542) was simply solving the late-bound calls by artificially increasing stack size for ```NewEnum``` both in the late-bound asm and in the PCode stack pop, just once. However, with the additon of [Item (Get) stack fix](#item-get-stack-fix), the solution was upgraded to account for early-bound calls to ```NewEnum``` and so the stack size to be popped is also [dynamically adjusted](https://github.com/cristianbuse/VBA-FastDictionary/blob/b019abe22fe93acd488c642c62509416aceadc75/src/Dictionary.cls#L341-L351) in the exact way as ```Item``` (Get).
+The [For Each](https://stackoverflow.com/questions/63848617/bug-with-for-each-enumeration-on-x64-custom-classes) bug usually leads to a crash. [Previous solution](https://github.com/cristianbuse/VBA-FastDictionary/blob/4b93590de56cec7e92bc1f741ee068d1e87e9527/src/Dictionary.cls#L1494-L1542) was simply solving the late-bound calls by artificially increasing stack size for ```NewEnum``` both in the late-bound asm and in the PCode stack pop, just once. However, with the addition of [Item (Get) stack fix](#item-get-stack-fix), the solution was upgraded to account for early-bound calls to ```NewEnum``` and so the stack size to be popped is also [dynamically adjusted](https://github.com/cristianbuse/VBA-FastDictionary/blob/b019abe22fe93acd488c642c62509416aceadc75/src/Dictionary.cls#L341-L351) in the exact way as ```Item``` (Get).
 
 The main difference when compared to ```Item``` is that ```NewEnum``` did not have an argument and so, a dummy one was added: ```Optional ByVal dummyRegisterR8 As Long```. This does not affect functionality while providing the much needed ```MOV QWORD PTR [R12+00000010],R8``` instruction which allows us to save 3 bytes by rewriting to ```MOV QWORD PTR [R12+10],R8``` i.e. use a BYTE offset instead of a DWORD. Without this workaround, we would need to allocate separate memory space with code-execution privileges, in order to achieve the desired result.
 
