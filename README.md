@@ -7,7 +7,7 @@ Special thanks to [Guido](https://github.com/guwidoe) for his contribution (see 
 
 ## Installation
 
-Download the latest [release](https://github.com/cristianbuse/VBA-FastDictionary/releases), extract and import the ```Dictionary.cls``` class into your project.
+Download the [latest release](https://github.com/cristianbuse/VBA-FastDictionary/releases/latest), extract and import the ```Dictionary.cls``` class into your project.
 
 Although the ```OLE Automation``` project reference should be enabled by default (fundamental COM), please enable it if it's disabled. For more details see [OLE Automation](https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#ole-automation) section.
 
@@ -24,7 +24,7 @@ Although the ```OLE Automation``` project reference should be enabled by default
 
 ## Testing
 
-Download the latest [release](https://github.com/cristianbuse/VBA-FastDictionary/releases), extract and import the ```TestDictionary.bas``` module into your project.
+Download the [latest release](https://github.com/cristianbuse/VBA-FastDictionary/releases/latest), extract and import the ```TestDictionary.bas``` module into your project.
 Run ```RunAllDictionaryTests``` method. On failure, execution will stop on the first failed Assert.
 
 ## Benchmarking
