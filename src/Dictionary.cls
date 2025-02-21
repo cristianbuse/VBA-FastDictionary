@@ -1588,9 +1588,9 @@ Private Sub FixStackBugs(ByRef h As Globals)
     h.saP.pvData = Mem.RPtr(0) + ptrSize * opNumTerminate
     terminatePtr = Mem.RPtr(0)
     '
-    FixStackSize h, itemGetPtr, &H18, &HFFF8, False, h.stItemGet
-    FixStackSize h, newEnumPtr, &H18, &HFFF8, False, h.stNewEnum
-    FixStackSize h, terminatePtr, &H8, &HFFF8, True, h.stTerminate
+    FixStackSize h, itemGetPtr, &H18, &H800, False, h.stItemGet
+    FixStackSize h, newEnumPtr, &H18, &H800, False, h.stNewEnum
+    FixStackSize h, terminatePtr, &H8, &H800, True, h.stTerminate
 End Sub
 Private Sub FixStackSize(ByRef h As Globals _
                        , ByVal funcPtr As LongPtr _
