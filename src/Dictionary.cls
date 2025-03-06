@@ -124,6 +124,7 @@ Const MaxLoadFactor As Single = 0.5
 #Const x64 = Win64
 #Const x32 = (x64 = 0) 'We don't care about x16
 #Const x64StackIssues = (Windows And x64 And (TWINBASIC = 0))
+#Const FastDealloc = (TWINBASIC = 0)
     
 #If x64 Then
     Const NullPtr As LongLong = 0^
@@ -156,6 +157,14 @@ Private Enum HashMeta
     [_modHM] = hmError
     [_maskHM] = [_modHM] - 1
 End Enum
+
+#If DEBUG_MODE Then
+Public Enum InstanceType
+    itActive = 1
+    itTerminated = 2
+    itAll = itActive Or itTerminated
+End Enum
+#End If
 
 Private Type Group
     Count As Long
@@ -240,6 +249,11 @@ Private Type Globals
     saP As SAFEARRAY_1D
     d As Double 'For hashing numbers
     dPtr As LongPtr
+    vTablePtr As LongPtr
+#If FastDealloc Then
+    defRefCountPtr As LongPtr
+    defRefCountCheck As LongPtr
+#End If
     lastInstancePtr As LongPtr
     lastTerminatedPtr As LongPtr
     lastTerminatedNextPtr As LongPtr
@@ -427,19 +441,35 @@ End Property
 Public Sub IEnumVARIANT_Next(ByVal celt As Long _
                            , ByRef rgVar As Variant _
                            , ByRef pceltFetched As Long)
-    Dim ptr As LongPtr: ptr = ObjPtr(Me) + ptrSize
-    Dim temp As LongPtr
-    '
-    CopyMemory temp, ByVal ptr, ptrSize
-    If temp = NullPtr Then Exit Sub
-    '
-    VariantCopy rgVar, temp
+    Dim ptr As LongPtr: ptr = ObjPtr(Me)
+    Dim currItemAddr As LongPtr: currItemAddr = ptr + ptrSize
+    Dim currItemPtr As LongPtr
+    Dim nextItemPtr As LongPtr
+    Dim vtbl As LongPtr
     #If x64 Then
-        CopyMemory ByVal ptr, ByVal temp + 40, ptrSize
+        Const nextItemOffset As LongLong = 40
     #Else
-        CopyMemory ByVal ptr, ByVal temp + 24, ptrSize
+        Const nextItemOffset As Long = 24
     #End If
-    pceltFetched = 1
+    '
+    CopyMemory currItemPtr, ByVal currItemAddr, ptrSize
+    If currItemPtr = NullPtr Then
+        rgVar = Empty
+        Exit Sub
+    End If
+    '
+    VariantCopy rgVar, currItemPtr
+    If VarPtr(pceltFetched) = NullPtr Then
+        CopyMemory nextItemPtr, ByVal currItemPtr + nextItemOffset, ptrSize
+        If nextItemPtr = NullPtr Then 'Restore original vtbl
+            CopyMemory vtbl, ByVal ptr, ptrSize
+            CopyMemory ByVal ptr, ByVal vtbl + ptrSize * 7, ptrSize
+        End If
+        CopyMemory ByVal currItemAddr, nextItemPtr, ptrSize
+    Else
+        CopyMemory ByVal currItemAddr, ByVal currItemPtr + nextItemOffset, ptrSize
+        pceltFetched = 1
+    End If
 End Sub
 #End If
 
@@ -1334,49 +1364,113 @@ End Sub
 '   (Attribute VB_PredeclaredId = True)
 'On Windows it initializes a Collection to call ScriptingDictionary.HashVal with
 '   early binding speed
-Friend Sub InitStructs(ByRef v As DictionaryVariables _
-                     , ByRef m As MemoryAccessors)
+Friend Sub InitStructs(ByRef dict As Dictionary _
+                     , ByRef v As DictionaryVariables _
+                     , ByRef m As MemoryAccessors _
+                     , ByVal refCountCorrection As LongPtr)
     Static l As Lookups
     Static h As Globals
     Static saL As SAFEARRAY_1D
     Static saH As SAFEARRAY_1D
     Static saPtrs(0 To 4) As LongPtr
+    Static lastInstance As Dictionary
+    Dim prevPtr As LongPtr
     Dim temp As Object
     Dim tempPtr As LongPtr
+#If FastDealloc Then
+    Dim foundTerminated As Boolean
+    Dim mustInitGlobal As Boolean
+#End If
     '
     If Not Vars.DefInstance Is Nothing Then
-        Vars.DefInstance.InitStructs v, m
+        Vars.DefInstance.InitStructs dict, v, m, refCountCorrection
         Exit Sub
     End If
     '
+    #If FastDealloc Then
+        h.defRefCountCheck = h.defRefCountCheck + 1
+    #End If
     If saL.cDims = 0 Then
+        If h.vTablePtr <> NullPtr Then Exit Sub
+        '
         h.nextPtrOffset = VarPtr(Vars.Dealloc.NextDictPtr) - Vars.Dealloc.ThisPtr
         h.defPtrOffset = VarPtr(Vars.DefInstance) - Vars.Dealloc.ThisPtr
+        '
+        'Init pointer accessor only
+        saPtrs(3) = VarPtr(h.saP)
+        InitSafeArray h.saP, ptrSize
+        '
+        'The only API call on Windows VB*
+        CopyMemory ByVal VarPtr(Mem) + ptrSize * 3, saPtrs(3), ptrSize
+        '
+        'Store virtual table pointer for finding terminated instances
+        h.saP.pvData = Vars.Dealloc.ThisPtr
+        h.saP.rgsabound0.cElements = 1
+        h.vTablePtr = Mem.RPtr(0)
+        '
+        h.saP.pvData = Vars.Dealloc.ThisPtr + prevOffset
+        prevPtr = Mem.RPtr(0)
+        '
+#If FastDealloc Then
+        'Find unexposed default instance
+        Do While prevPtr <> NullPtr
+            h.saP.pvData = prevPtr
+            If Mem.RPtr(0) = h.vTablePtr Then 'Active instance
+                h.saP.pvData = prevPtr + h.defPtrOffset
+                tempPtr = Mem.RPtr(0)
+                If tempPtr <> NullPtr Then Exit Do
+            Else
+                foundTerminated = True
+            End If
+            h.saP.pvData = prevPtr + prevOffset
+            prevPtr = Mem.RPtr(0)
+        Loop
+        If (tempPtr = NullPtr) And foundTerminated Then
+            tempPtr = h.saP.pvData - prevOffset
+        End If
+        If tempPtr <> NullPtr Then
+            If tempPtr = prevPtr Then 'Just transfer pointer
+                Mem.RPtr(0) = NullPtr 'Ref count not decreased
+                h.saP.pvData = VarPtr(Vars.DefInstance)
+                Mem.RPtr(0) = tempPtr 'Ref count not increased
+                tempPtr = -1
+            Else 'Use unmanaged variable
+                h.saP.pvData = VarPtr(temp)
+                Mem.RPtr(0) = tempPtr 'Ref count not increased
+                Set Vars.DefInstance = temp 'Ref count increased
+                Mem.RPtr(0) = NullPtr 'Ref count not decreased
+                tempPtr = 0
+            End If
+            Vars.DefInstance.InitStructs Me, Vars, Mem, tempPtr
+            If v.Dealloc.ThisPtr <> Vars.Dealloc.ThisPtr Then
+                Vars.DefInstance.InitStructs dict, v, m, 0
+            End If
+            Exit Sub
+        End If
+        '
+        'Hide the default instance so that it is not globally accessible
+        'This allows precise tracking of its reference count
+        Set Dictionary = New Dictionary
+        mustInitGlobal = True
+#End If
         '
         saPtrs(0) = VarPtr(saH)
         saPtrs(1) = VarPtr(saL)
         saPtrs(2) = VarPtr(h.saI)
-        saPtrs(3) = VarPtr(h.saP)
         '
         InitLookups l
         InitSafeArray saH, LenB(h)
         InitSafeArray saL, LenB(l)
         InitSafeArray h.saI, intSize
-        InitSafeArray h.saP, ptrSize
         '
         saH.pvData = VarPtr(h)
         saL.pvData = VarPtr(l)
         h.dPtr = VarPtr(h.d)
         h.saI.pvData = h.dPtr
-        h.saP.pvData = h.dPtr
         '
         saH.rgsabound0.cElements = 1
         saL.rgsabound0.cElements = 1
         h.saI.rgsabound0.cElements = intsPerDouble
-        h.saP.rgsabound0.cElements = 1
-        '
-        'The only API call on Windows
-        CopyMemory ByVal VarPtr(Mem) + ptrSize * 3, saPtrs(3), ptrSize
 #If Windows Then
         Const dictVTables As Long = 4
         Const dictMainVTableSize As Long = 22
@@ -1439,16 +1533,28 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
         End If
         #If x64StackIssues Then
             'Init Integer Accessor sooner
-            h.saP.pvData = VarPtr(m) + ptrSize * 2
+            h.saP.pvData = VarPtr(Mem) + ptrSize * 2
             Mem.RPtr(0) = saPtrs(2)
             '
             FixStackBugs h
         #End If
 #End If
+        #If FastDealloc Then
+            h.saP.pvData = Vars.Dealloc.ThisPtr + ptrSize * 2 'IUnknown
+            h.defRefCountPtr = Mem.RPtr(0) + ptrSize
+            h.saP.pvData = h.defRefCountPtr
+            h.defRefCountCheck = Mem.RPtr(0) And &H7FFFFFFF
+            h.lastInstancePtr = Vars.Dealloc.ThisPtr
+        #End If
     End If
     '
-    'Avoid deallocation of Global Instance
-    If v.Dealloc.ThisPtr <> Vars.Dealloc.ThisPtr Then Set v.DefInstance = Me
+    'Avoid deallocation of default/controller instance
+    #If FastDealloc Then
+        Set v.DefInstance = Me
+        h.defRefCountCheck = h.defRefCountCheck + refCountCorrection + 1
+    #Else
+        If v.Dealloc.ThisPtr <> Vars.Dealloc.ThisPtr Then Set v.DefInstance = Me
+    #End If
     '
 #If Mac Then
     CopyMemory ByVal VarPtr(m), saPtrs(0), ptrSize * 4
@@ -1464,72 +1570,50 @@ Friend Sub InitStructs(ByRef v As DictionaryVariables _
     Next i
     h.saP.rgsabound0.cElements = 1
 #End If
-#If TWINBASIC = 0 Then
+#If FastDealloc Then
+    h.saP.pvData = h.defRefCountPtr
+    If h.defRefCountCheck <> (Mem.RPtr(0) And &H7FFFFFFF) Then FixLostState
+    '
     h.saP.pvData = v.Dealloc.ThisPtr + prevOffset
-    '
-    Dim prevPtr As LongPtr: prevPtr = Mem.RPtr(0)
-    '
-    If prevPtr = NullPtr Then 'Can only be def instance
-        h.lastInstancePtr = v.Dealloc.ThisPtr
-        GoTo Initialized
-    End If
-    '
-    'In case user modified the global instance e.g. Set Dictionary = Nothing
-    If v.DefInstance Is Nothing Then
-        Do
-            h.saP.pvData = prevPtr + h.defPtrOffset
-            tempPtr = Mem.RPtr(0)
-            If tempPtr Then Exit Do
-            '
-            h.saP.pvData = prevPtr + prevOffset
-            If Mem.RPtr(0) = NullPtr Then
-                h.saP.pvData = prevPtr + h.nextPtrOffset
-                If Mem.RPtr(0) Then tempPtr = prevPtr
-                Exit Do
-            End If
-            prevPtr = Mem.RPtr(0)
-        Loop
-        If (tempPtr <> NullPtr) And (tempPtr <> Vars.Dealloc.ThisPtr) Then
-            'Link to the 'real' def instance
-            h.saP.pvData = VarPtr(temp)
-            Mem.RPtr(0) = tempPtr 'Unmanaged - ref count not increased
-            Set Vars.DefInstance = temp
-            Mem.RPtr(0) = NullPtr 'Ref count not decreased
-            '
-            #If Windows Then
-                Set c = Nothing
-            #End If
-            Vars.DefInstance.InitStructs Vars, Mem
-            With Mem.Common(0)
-                .saP.pvData = .lastTerminatedPtr + prevOffset
-                If Mem.RPtr(0) = v.Dealloc.ThisPtr Then
-                    'Previous instance is currently initializing and it is
-                    '   definitely reusing previously terminated memory
-                    v.Dealloc.NextDictPtr = .lastTerminatedPtr
-                    .saP.pvData = .lastTerminatedPtr + .nextPtrOffset
-                    Mem.RPtr(0) = .lastTerminatedNextPtr
-                    .lastTerminatedNextPtr = v.Dealloc.ThisPtr
-                    .saP.pvData = v.Dealloc.ThisPtr + prevOffset
-                    .lastTerminatedPtr = Mem.RPtr(0)
-                End If
-                .saP.pvData = .dPtr
-            End With
-            Exit Sub
-        End If
-    End If
+    prevPtr = Mem.RPtr(0)
+    If prevPtr = NullPtr Then GoTo Initialized
     '
     If v.Dealloc.ThisPtr = h.lastTerminatedPtr Then
         'Reusing previously terminated memory
         v.Dealloc.NextDictPtr = h.lastTerminatedNextPtr
-        h.lastTerminatedPtr = prevPtr
-        h.lastTerminatedNextPtr = v.Dealloc.ThisPtr
+        '
+        h.saP.pvData = prevPtr
+        If Mem.RPtr(0) = h.vTablePtr Then
+            h.saP.pvData = prevPtr + prevOffset
+            tempPtr = Mem.RPtr(0)
+            '
+            h.lastTerminatedPtr = NullPtr
+            h.lastTerminatedNextPtr = NullPtr
+            '
+            If tempPtr <> NullPtr Then
+                h.saP.pvData = tempPtr
+                If Mem.RPtr(0) <> h.vTablePtr Then
+                    h.lastTerminatedPtr = tempPtr
+                    h.lastTerminatedNextPtr = prevPtr
+                End If
+            End If
+        Else
+            h.lastTerminatedPtr = prevPtr
+            h.lastTerminatedNextPtr = v.Dealloc.ThisPtr
+        End If
     Else
         If prevPtr = h.lastInstancePtr Then
             h.lastInstancePtr = v.Dealloc.ThisPtr
+            If h.lastTerminatedPtr <> NullPtr Then
+                h.saP.pvData = h.lastTerminatedPtr + h.nextPtrOffset
+                Mem.RPtr(0) = h.lastTerminatedNextPtr
+            End If
+            Set lastInstance = dict
         Else 'The previous instance could be initializing
             h.saP.pvData = prevPtr + prevOffset
             If Mem.RPtr(0) = h.lastInstancePtr Then
                 h.lastInstancePtr = v.Dealloc.ThisPtr
+                Set lastInstance = dict
             End If
         End If
     End If
@@ -1545,6 +1629,14 @@ Initialized:
     '
     h.saP.pvData = h.dPtr
     v.IsInitialized = True
+#If FastDealloc Then
+    If mustInitGlobal Then
+        Set temp = New Dictionary 'Force init global dict
+        Set temp = Nothing
+        h.defRefCountCheck = h.defRefCountCheck - 4 '_Initialize
+    End If
+    h.defRefCountCheck = h.defRefCountCheck - 1
+#End If
 End Sub
 
 'https://stackoverflow.com/a/9516565/8488913
@@ -1675,21 +1767,23 @@ Private Function DictEnum() As IUnknown
         .enumsColl.Add DictEnum, CStr(ObjPtr(DictEnum))
     End With
     '
+    If Vars.UsedCount = 0 Then Exit Function
 #If TWINBASIC Then
-    Static vtbl(0 To 6) As LongPtr
+    Static vtbl(0 To 7) As LongPtr
     Dim tempPtr As LongPtr: tempPtr = ObjPtr(DictEnum)
     Dim vtblptr As LongPtr
     '
-    CopyMemory vtblptr, ByVal tempPtr, ptrSize
-    CopyMemory vtbl(0), ByVal vtblptr, ptrSize * 7 'Copy original virtual table
+    If vtbl(0) = NullPtr Then
+        CopyMemory vtblptr, ByVal tempPtr, ptrSize
+        CopyMemory vtbl(0), ByVal vtblptr, ptrSize * 7 'Copy original virtual table
+        vtbl(7) = vtblptr 'Save original vtbl at additional position
+        CopyMemory vtblptr, ByVal Vars.Dealloc.ThisPtr, ptrSize
+        CopyMemory vtbl(3), ByVal vtblptr + ptrSize * 11, ptrSize 'Replace 'Next'
+    End If
     '
-    CopyMemory vtbl(3), ByVal Vars.Dealloc.ThisPtr, ptrSize
-    CopyMemory vtbl(3), ByVal vtbl(3) + ptrSize * 11, ptrSize 'Replace 'Next'
-    '
-    'Swap original vTable with our own (5 out of 7 are still original functions)
+    'Swap original vTable with our own
     CopyMemory ByVal tempPtr, VarPtr(vtbl(0)), ptrSize
 #End If
-    If Vars.UsedCount = 0 Then Exit Function
     '
     Dim i As Long
     Dim hasGaps As Boolean: hasGaps = (Vars.UsedCount < Vars.Count)
@@ -1840,7 +1934,7 @@ End Sub
 'Only initialize memory manipulation structs
 Private Sub Class_Initialize()
     Vars.Dealloc.ThisPtr = ObjPtr(Me)
-    Dictionary.InitStructs Vars, Mem
+    Dictionary.InitStructs Me, Vars, Mem, 0
 End Sub
 
 #If TWINBASIC Then
@@ -1859,9 +1953,10 @@ Private Sub Class_Terminate()
     Mem.Common(0).saP.pvData = VarPtr(Mem.Common)
     Mem.RPtr(0) = NullPtr
 End Sub
-#Else
+#ElseIf FastDealloc Then
 'Postpones termination to a later stage where we have full control over how VBA
 '   traverses the linked list of all dictionary instances
+'https://codereview.stackexchange.com/questions/294682/faster-vb6-vba-class-deallocation
 Private Sub Class_Terminate()
     With Mem.Common(0)
         .nestingLevel = .nestingLevel + 1
@@ -1905,7 +2000,6 @@ Private Sub Class_Terminate()
         '
         'Cache this instance inside the global instance and destroy later
         Vars.DefInstance.DelayTermination Me, Vars
-        Set Vars.DefInstance = Nothing
         .nestingLevel = .nestingLevel - 1
     End With
 End Sub
@@ -1915,6 +2009,7 @@ Friend Sub ManageDeepNested(ByRef v As DictionaryVariables _
     Static dicts As New Collection
     Dim i As Long
     '
+    Mem.Common(0).defRefCountCheck = Mem.Common(0).defRefCountCheck + 1
     If dnAction = clearNestedDelayed Then
         For i = 1 To dicts.Count 'We don't go beyond current count
             dicts.Remove 1       'This line can increase count indirectly if max
@@ -1930,7 +2025,10 @@ Friend Sub ManageDeepNested(ByRef v As DictionaryVariables _
         #End If
         Next i
     End If
-    Mem.Common(0).hasNestedPending = (dicts.Count > 0)
+    With Mem.Common(0)
+        .hasNestedPending = (dicts.Count > 0)
+        .defRefCountCheck = .defRefCountCheck - 1
+    End With
 End Sub
 
 'When VB* terminates a class instance, it traverses all instances starting from
@@ -1944,12 +2042,10 @@ Friend Sub DelayTermination(ByRef dictToDelay As Dictionary _
                           , ByRef v As DictionaryVariables)
     Static pendingDict As Dictionary
     Static pendingPtr As LongPtr
-    Static lastDict As Dictionary
-    Static lastDictPtr As LongPtr
     Dim prevPtr As LongPtr
     Dim followPtr As LongPtr
     Dim secondLastPtr As LongPtr
-    Dim tempDict As Dictionary
+    Dim insertAfterPtr As LongPtr
     '
     If pendingDict Is Nothing Then
         Set pendingDict = dictToDelay
@@ -1957,37 +2053,24 @@ Friend Sub DelayTermination(ByRef dictToDelay As Dictionary _
         Exit Sub
     End If
     With Mem.Common(0)
-        If pendingPtr = .lastInstancePtr Then
-            'We force keep the last instance active to avoid extra logic
-            If lastDict Is Nothing Then
-                Set lastDict = pendingDict
-                lastDictPtr = pendingPtr
-                Set pendingDict = dictToDelay
-                pendingPtr = v.Dealloc.ThisPtr
-                Exit Sub
-            End If
-            '
-            Set tempDict = lastDict
-            Set lastDict = pendingDict
-            Set pendingDict = tempDict
-            Set tempDict = Nothing
-            pendingPtr = lastDictPtr
-            lastDictPtr = .lastInstancePtr
-        End If
-        '
+        .defRefCountCheck = .defRefCountCheck + 1
+        .saP.pvData = .defRefCountPtr
+        If .defRefCountCheck <> (Mem.RPtr(0) And &H7FFFFFFF) Then FixLostState
         If .lastTerminatedPtr = NullPtr Then
-            .lastTerminatedPtr = Vars.Dealloc.ThisPtr 'Use Def instance
+            insertAfterPtr = Vars.Dealloc.ThisPtr 'Use Def instance
+        Else
+            insertAfterPtr = .lastTerminatedPtr
         End If
         '
         .saP.pvData = pendingPtr + prevOffset
         prevPtr = Mem.RPtr(0)
         '
-        If prevPtr = .lastTerminatedPtr Then
+        If prevPtr = insertAfterPtr Then
             .saP.pvData = pendingPtr + .nextPtrOffset
             followPtr = Mem.RPtr(0)
         Else 'Insert after last terminated
-            Mem.RPtr(0) = .lastTerminatedPtr
-            .saP.pvData = .lastTerminatedPtr + .nextPtrOffset
+            Mem.RPtr(0) = insertAfterPtr
+            .saP.pvData = insertAfterPtr + .nextPtrOffset
             '
             Dim tempPtr As LongPtr: tempPtr = Mem.RPtr(0)
             Mem.RPtr(0) = pendingPtr
@@ -2020,33 +2103,124 @@ Friend Sub DelayTermination(ByRef dictToDelay As Dictionary _
         Mem.RPtr(0) = secondLastPtr 'Restore to long list
         '
         .saP.pvData = pendingPtr + prevOffset
-        If .lastTerminatedPtr <> Mem.RPtr(0) Then 'Memory was reclaimed
+        If insertAfterPtr <> Mem.RPtr(0) Then 'Memory was reclaimed
             .saP.pvData = Mem.RPtr(0) + .nextPtrOffset
             Mem.RPtr(0) = pendingPtr
         End If
+        '
         .lastTerminatedPtr = pendingPtr
         .lastTerminatedNextPtr = followPtr
         .saP.pvData = .dPtr
         '
         Set pendingDict = dictToDelay
         pendingPtr = v.Dealloc.ThisPtr
+        .defRefCountCheck = .defRefCountCheck - 2
     End With
 End Sub
-#End If
+
+Private Sub FixLostState()
+    Dim ptr As LongPtr
+    Dim followPtr As LongPtr
+    Dim arrTerminated() As LongPtr
+    Dim terminatedCount As Long
+    Dim terminatedUB As Long
+    Dim i As Long
+    '
+    With Mem.Common(0)
+        ptr = .lastInstancePtr
+        '
+        Do While ptr <> NullPtr
+            .saP.pvData = ptr
+            If Mem.RPtr(0) = .vTablePtr Then
+                .saP.pvData = ptr + .nextPtrOffset
+                Mem.RPtr(0) = followPtr
+                If followPtr <> NullPtr Then
+                    .saP.pvData = followPtr + prevOffset
+                    Mem.RPtr(0) = ptr
+                End If
+                followPtr = ptr
+            Else
+                terminatedCount = terminatedCount + 1
+                If terminatedCount >= terminatedUB Then
+                    terminatedUB = terminatedCount * 2
+                    ReDim Preserve arrTerminated(0 To terminatedUB)
+                End If
+                arrTerminated(terminatedCount) = ptr
+            End If
+            '
+            .saP.pvData = ptr + prevOffset
+            ptr = Mem.RPtr(0)
+        Loop
+        '
+        If terminatedCount = 0 Then
+            .lastTerminatedPtr = NullPtr
+            .lastTerminatedNextPtr = NullPtr
+            GoTo TrackRefCount
+        End If
+        '
+        'Find last terminated
+        .lastTerminatedPtr = arrTerminated(terminatedCount)
+        For i = 1 To terminatedCount - 1
+            ptr = arrTerminated(i)
+            Do
+                .saP.pvData = ptr
+                ptr = Mem.RPtr(0)
+                If ptr = .lastTerminatedPtr Then
+                    .lastTerminatedPtr = arrTerminated(i)
+                    Exit Do
+                End If
+            Loop Until ptr = NullPtr
+        Next i
+        '
+        'Preserve termination order
+        arrTerminated(terminatedCount) = .lastTerminatedPtr
+        For i = terminatedCount - 1 To 1 Step -1
+            .saP.pvData = arrTerminated(i + 1)
+             arrTerminated(i) = Mem.RPtr(0)
+        Next i
+        '
+        'Insert all terminated instances immediately after default / controller
+        .saP.pvData = .lastInstancePtr + .defPtrOffset
+        arrTerminated(0) = Mem.RPtr(0)
+        '
+        .saP.pvData = arrTerminated(0) + .nextPtrOffset
+        .lastTerminatedNextPtr = Mem.RPtr(0)
+        Mem.RPtr(0) = arrTerminated(1)
+        '
+        arrTerminated(terminatedCount + 1) = .lastTerminatedNextPtr
+        For i = 1 To terminatedCount
+            .saP.pvData = arrTerminated(i) + prevOffset
+            Mem.RPtr(0) = arrTerminated(i - 1)
+            .saP.pvData = arrTerminated(i) + .nextPtrOffset
+            Mem.RPtr(0) = arrTerminated(i + 1)
+        Next i
+        .saP.pvData = .lastTerminatedNextPtr + prevOffset
+        Mem.RPtr(0) = .lastTerminatedPtr
+        '
+TrackRefCount:
+        .saP.pvData = .defRefCountPtr
+        .defRefCountCheck = Mem.RPtr(0) And &H7FFFFFFF
+    End With
+End Sub
 
 #If DEBUG_MODE Then
 Public Property Get LastCreatedInstancePtr() As LongPtr
     LastCreatedInstancePtr = Mem.Common(0).lastInstancePtr
 End Property
-Public Property Get InstanceCount() As Long
+Public Property Get InstanceCount(Optional ByVal iType As InstanceType = itAll) As Long
+    Dim iTypeFound As InstanceType
     With Mem.Common(0)
         Dim ptr As LongPtr: ptr = .lastInstancePtr
         Do While ptr <> NullPtr
-            .saP.pvData = ptr + ptrSize
+            .saP.pvData = ptr
+            If Mem.RPtr(0) = .vTablePtr Then iTypeFound = itActive _
+                                        Else iTypeFound = itTerminated
+            If iType And iTypeFound Then InstanceCount = InstanceCount + 1
+            .saP.pvData = ptr + prevOffset
             ptr = Mem.RPtr(0)
-            InstanceCount = InstanceCount + 1
         Loop
         .saP.pvData = .dPtr
     End With
 End Property
+#End If
 #End If

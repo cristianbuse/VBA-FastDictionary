@@ -155,8 +155,8 @@ Private Sub TestDictionaryCompare()
     '
     'StrComp sees the following 2 Unicode surrogates as equal but they are not
     '   and the dictionary should be able to handle them in text compare mode
-    d.Add ChrW$(&HD883), 1
-    d.Add ChrW$(&HD994), 2
+    d.Add ChrW$(CInt(&HD883)), 1
+    d.Add ChrW$(CInt(&HD994)), 2
     '
     Const lcidRomanian As Long = 1048
     Const lcidCroatian As Long = 1050
