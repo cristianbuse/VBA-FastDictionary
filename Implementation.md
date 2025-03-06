@@ -42,6 +42,7 @@ This Dictionary does not require any DLL references or any kind of external libr
     - [Item (Get) stack fix](#item-get-stack-fix)
     - [NewEnum stack fix](#newenum-stack-fix)
     - [Class_Terminate stack fix](#class_terminate-stack-fix)
+- [Fast Deallocation](#fast-deallocation)
 ***
 
 ## Compatibility with ```Scripting.Dictionary```
@@ -1067,3 +1068,21 @@ The solution for ```Class_Terminate``` is simpler because we know there are no a
 While the first call to ```Class_Terminate``` should have a larger stack frame to avoid the bug, all subsequent nested calls should have the original size. Tracking the nesting level was done anyway for managed nesting deallocation. So, we use the nesting level to adjust the stack size as seen [here](https://github.com/cristianbuse/VBA-FastDictionary/blob/b019abe22fe93acd488c642c62509416aceadc75/src/Dictionary.cls#L1879-L1903).
 
 We find the ```_Terminate``` pointer by finding the 4th method in the virtual table of the ```IClassModuleEvt``` interface as seen [here](https://github.com/cristianbuse/VBA-FastDictionary/blob/b019abe22fe93acd488c642c62509416aceadc75/src/Dictionary.cls#L1585-L1589).
+
+## Fast Deallocation
+
+Class deallocation in VB6 / VBA is by default exponential and slow. This is by design - VB* traverses the linked list of instance pointers from last created to first created, and it does this for each and every instance being terminated. The mechanism is described in detail in [Faster VB6 / VBA class deallocation](https://codereview.stackexchange.com/questions/294682/faster-vb6-vba-class-deallocation).
+This class overcomes this flawed design:
+- track and maintain the original linked list of instance pointers
+- track the same linked list in reverse i.e. know what the next instance is, not just the previous
+- track the last instance that was partially terminated i.e. not destroyed
+- swap instances in the double-linked list so that all partially terminated instances are consecutive
+- when terminating an instance, make the linked list as short as possible so that VB* traverses less. Once terminated, restore list - this makes sure that if state is lost, all memory is reclaimed properly
+- hide 'default' / 'controller' instance that holds shared common state between all instances. Track reference count for this instance so that state loss in external project can be detected and fixed
+
+As per the above mentioned Code Review article, the improvements are as follows:
+| Default VB* implementation  | Improved managed approach |
+|-|-|
+| ![beforeDealloc](https://github.com/user-attachments/assets/f2574527-d970-42f9-9c22-195abc35f8c2) | ![afterDealloc](https://github.com/user-attachments/assets/da068968-13c9-49b4-8791-9829bd48d4a5) |
+
+In the above screenshots, destroying 950,000 instances used to take 185 seconds but it is now done in 0.67 seconds. An improvement of over 250x.
