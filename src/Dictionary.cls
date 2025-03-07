@@ -96,6 +96,16 @@ Attribute VB_Exposed = False
 Option Explicit
 Option Compare Binary
 
+'https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#compatibility-with-scriptingdictionary
+
+'If set to 'True' would match Scripting.Dictionary functionality
+#Const LOCAL_STRICT_SCRIPTING_MODE = False
+
+'GLOBAL_... can be set in the Project Properties under
+' Conditional Compilation Arguments
+#Const StrictScriptingMode = LOCAL_STRICT_SCRIPTING_MODE Or _
+                             GLOBAL_STRICT_SCRIPTING_MODE
+
 #If Mac Then
     #If VBA7 Then
         Private Declare PtrSafe Function CopyMemory Lib "/usr/lib/libc.dylib" Alias "memmove" (Destination As Any, Source As Any, ByVal Length As LongPtr) As LongPtr
@@ -394,9 +404,17 @@ Attribute Item.VB_UserMemId = 0
 #End If
     Dim i As Long: i = GetIndex(Key)
     '
+#If StrictScriptingMode Then
+    'https://github.com/cristianbuse/VBA-FastDictionary/discussions/28
+    If i = notFound Then
+        Add Key, Empty
+        Exit Property
+    End If
+#Else
     'We raise error manually to avoid issue #14
     'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
     If i = notFound Then Err.Raise 9
+#End If
 #If x64 Then
     If Vars.Meta(i) And isItemObjBit Then
 #Else
@@ -967,14 +985,22 @@ Private Function FindIndex(ByVal i As Long) As Long
     FindIndex = j
 End Function
 
+#If StrictScriptingMode Then
+Public Property Get Items() As Variant
+#Else
 Public Property Get Items() As Variant()
+#End If
     If Vars.UsedCount = 0 Then
         Items = Array()
         Exit Property
     End If
     If Vars.UsedCount = Vars.Count Then
         Items = Vars.Items
-        ReDim Preserve Items(0 To Vars.Count - 1)
+        #If StrictScriptingMode Then
+            RedimItemsOrKeys Items
+        #Else
+            ReDim Preserve Items(0 To Vars.Count - 1)
+        #End If
     Else
         Dim res() As Variant
         ReDim res(0 To Vars.UsedCount - 1)
@@ -999,6 +1025,10 @@ Public Property Get Items() As Variant()
         Items = res
     End If
 End Property
+'Avoid copying the array again
+Private Sub RedimItemsOrKeys(ByRef arr As Variant)
+    ReDim Preserve arr(0 To Vars.Count - 1)
+End Sub
 
 'Change an existing key value
 'Raises Error:
@@ -1096,7 +1126,11 @@ Public Property Get KeyAtIndex(ByVal i As Long) As Variant
 #End If
 End Property
 
+#If StrictScriptingMode Then
+Public Property Get Keys() As Variant
+#Else
 Public Property Get Keys() As Variant()
+#End If
     If Vars.UsedCount = 0 Then
         Keys = Array()
         Exit Property
@@ -1109,7 +1143,11 @@ Public Property Get Keys() As Variant()
 #If x64 Then
     If Vars.UsedCount = Vars.Count Then
         Keys = Vars.Keys
-        ReDim Preserve Keys(0 To Vars.Count - 1)
+        #If StrictScriptingMode Then
+            RedimItemsOrKeys Keys
+        #Else
+            ReDim Preserve Keys(0 To Vars.Count - 1)
+        #End If
     Else
         ReDim res(0 To Vars.UsedCount - 1)
         For i = 0 To Vars.Count - 1
@@ -2224,3 +2262,9 @@ Public Property Get InstanceCount(Optional ByVal iType As InstanceType = itAll) 
 End Property
 #End If
 #End If
+
+Public Property Get StrictScriptingMode() As Boolean
+#If StrictScriptingMode Then
+    StrictScriptingMode = True
+#End If
+End Property

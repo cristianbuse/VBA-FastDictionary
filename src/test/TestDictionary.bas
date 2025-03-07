@@ -433,15 +433,24 @@ Private Sub TestDictionaryItem()
     d.Item("new") = True 'Adds a new item
     Debug.Assert d("new") = True
     '
-    On Error Resume Next
-    v = d.Item("test")
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
-    For i = 100 To 105
-        Err.Clear
-        v = d.Item(i)
+    If d.StrictScriptingMode Then
+        Debug.Assert IsEmpty(d.Item("test"))
+        For i = 100 To 105
+            Debug.Assert IsEmpty(d.Item(i))
+        Next i
+    Else
+        On Error Resume Next
+        v = d.Item("test")
         Debug.Assert Err.Number = keyOrIndexNotFoundErr
-    Next i
-    Err.Clear
+        For i = 100 To 105
+            Err.Clear
+            v = d.Item(i)
+            Debug.Assert Err.Number = keyOrIndexNotFoundErr
+        Next i
+        On Error GoTo 0
+    End If
+    '
+    On Error Resume Next
     v = d.Item(Array())
     Debug.Assert Err.Number = unsupportedKeyErr
     On Error GoTo 0
