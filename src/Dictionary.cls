@@ -321,6 +321,13 @@ Private Type DeallocVars
     NextDictPtr As LongPtr
 End Type
 
+Private Type TempHash
+    hVal As Long
+    groupSlot As Long
+    controlByte As Long
+    isSet As Boolean
+End Type
+
 Private Type DictionaryVariables
     Hash As HashMap
     Enums As EnumProvider
@@ -337,6 +344,7 @@ Private Type DictionaryVariables
     UBound As Long
     UsedCount As Long
     AllowDuplicateKeys As Boolean
+    AddHash As TempHash
     DefInstance As Dictionary 'Avoids deallocation of default (Predeclared) dict
     Dealloc As DeallocVars
     IsInitialized As Boolean
@@ -402,15 +410,19 @@ Attribute Item.VB_UserMemId = 0
         .stItemGet.currentCallType = earlyBound
     End With
 #End If
-    Dim i As Long: GetIndex Key, i
-    '
+    Dim i As Long
 #If StrictScriptingMode Then
     'https://github.com/cristianbuse/VBA-FastDictionary/discussions/28
+    GetIndex Key, i, Vars.AddHash.hVal _
+                   , Vars.AddHash.groupSlot _
+                   , Vars.AddHash.controlByte
     If i = notFound Then
+        Vars.AddHash.isSet = True
         Add Key, Empty
         Exit Property
     End If
 #Else
+    GetIndex Key, i
     'We raise error manually to avoid issue #14
     'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
     If i = notFound Then Err.Raise 9
@@ -429,30 +441,36 @@ Public Property Let Item(ByRef Key As Variant, ByRef Item As Variant)
     If IsObject(Item) Or (VarType(Item) = vbDataObject) Then
         Err.Raise 450, TypeName(Me) & ".Item", "'Set' is required"
     End If
-    Dim i As Long: GetIndex Key, i
-    If i > notFound Then
-        #If x64 Then
-            Vars.Meta(i) = Vars.Meta(i) And keyBitMask
-        #Else
-            Vars.Keys(i).IsItemObj = False
-        #End If
-        Vars.Items(i) = Item
-    Else
+    Dim i As Long: GetIndex Key, i, Vars.AddHash.hVal _
+                                  , Vars.AddHash.groupSlot _
+                                  , Vars.AddHash.controlByte
+    If i = notFound Then
+        Vars.AddHash.isSet = True
         Add Key, Item
+        Exit Property
     End If
+    #If x64 Then
+        Vars.Meta(i) = Vars.Meta(i) And keyBitMask
+    #Else
+        Vars.Keys(i).IsItemObj = False
+    #End If
+    Vars.Items(i) = Item
 End Property
 Public Property Set Item(ByRef Key As Variant, ByRef Item As Object)
-    Dim i As Long: GetIndex Key, i
-    If i > notFound Then
-        #If x64 Then
-            Vars.Meta(i) = Vars.Meta(i) Or isItemObjBit
-        #Else
-            Vars.Keys(i).IsItemObj = True
-        #End If
-        Set Vars.Items(i) = Item
-    Else
+    Dim i As Long: GetIndex Key, i, Vars.AddHash.hVal _
+                                  , Vars.AddHash.groupSlot _
+                                  , Vars.AddHash.controlByte
+    If i = notFound Then
+        Vars.AddHash.isSet = True
         Add Key, Item
+        Exit Property
     End If
+    #If x64 Then
+        Vars.Meta(i) = Vars.Meta(i) Or isItemObjBit
+    #Else
+        Vars.Keys(i).IsItemObj = True
+    #End If
+    Set Vars.Items(i) = Item
 End Property
 
 #If TWINBASIC Then
@@ -517,11 +535,18 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
     Dim i As Long
     Dim controlByte As Long
     '
-    If Vars.AllowDuplicateKeys Then
-        GetIndex Key, , hVal, groupSlot, controlByte, hashOnly:=True
+    If Vars.AddHash.isSet Then
+        hVal = Vars.AddHash.hVal
+        groupSlot = Vars.AddHash.groupSlot
+        controlByte = Vars.AddHash.controlByte
+        Vars.AddHash.isSet = False
+    ElseIf Vars.AllowDuplicateKeys Then
+        GetIndex Key, i, hVal, groupSlot, controlByte, hashOnly:=True
     Else
         GetIndex Key, i, hVal, groupSlot, controlByte
-        If i > notFound Then Err.Raise 457, TypeName(Me) & ".Add"
+        If i > notFound Then
+            Err.Raise 457, TypeName(Me) & ".Add"
+        End If
     End If
     '
     If Vars.Count > Vars.UBound Then
@@ -691,6 +716,7 @@ Private Sub GetIndex(ByRef Key As Variant _
                         hVal = Mem.TextHash(0)(Key) Or hmText 'Early-binded
                     Else 'Faster to loop integers
                         .saI.pvData = StrPtr(Key)
+                        hVal = 0
                         For i = 0 To .saI.rgsabound0.cElements - 1
                             hVal = (hVal And tOverflowMask) * tPrime + Mem.RInt(i)
                         Next i
@@ -712,6 +738,7 @@ Private Sub GetIndex(ByRef Key As Variant _
                     Dim s As String: s = LCase$(Key)
                     .saI.pvData = StrPtr(s)
                 End If
+                hVal = 0
                 For i = 0 To .saI.rgsabound0.cElements - 1
                     hVal = (hVal And tOverflowMask) * tPrime + Mem.RInt(i)
                 Next i
