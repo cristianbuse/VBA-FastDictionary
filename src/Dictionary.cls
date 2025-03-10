@@ -692,7 +692,8 @@ Private Sub GetIndex(ByRef Key As Variant _
                    , Optional ByRef groupSlot As Long _
                    , Optional ByRef controlByte As Long _
                    , Optional ByRef posInGroup As Long _
-                   , Optional ByVal hashOnly As Boolean = False)
+                   , Optional ByVal hashOnly As Boolean = False _
+                   , Optional ByVal IgnoreErrors As Boolean = False)
     #If (x32) Or Mac Then
         Const vbLongLong = 20
     #End If
@@ -768,6 +769,10 @@ Private Sub GetIndex(ByRef Key As Variant _
         #End If
         Set iUnk = Nothing 'Because of Static but still faster than just Dim
     ElseIf vt > vbLongLong Then
+        If IgnoreErrors Then
+            outIndex = notFound
+            Exit Sub
+        End If
         Err.Raise 5, , "Cannot hash an Array or User Defined Type"
     ElseIf vt > vbNull Then
         Dim m As HashMeta
@@ -1270,9 +1275,15 @@ Public Sub PredictCount(ByVal expectedCount As Long)
 End Sub
 
 'Remove a single item
-'Raises Error:
-'   -   9: invalid key (key is not associated with any element)
-Public Sub Remove(ByRef Key As Variant)
+'Returns
+' * True, if item is removed
+' * False, if Key not found and IgnoreErrors = True
+'If IgnoreErrors = False and Key not found, raises error:
+' * invalid key (key is not associated with any element). Error code:
+'   -     9: if StrictScriptingMode = False
+'   - 32811: if StrictScriptingMode = True
+Public Function Remove(ByRef Key As Variant _
+                     , Optional ByVal IgnoreErrors As Boolean) As Boolean
     Dim groupSlot As Long
     Dim posInGroup As Long
     Dim lastPos As Long
@@ -1280,11 +1291,19 @@ Public Sub Remove(ByRef Key As Variant)
     Dim j As Long
     Dim ptr As LongPtr
     '
-    GetIndex Key, i, , groupSlot, , posInGroup
-    If i = notFound Then Err.Raise 9, TypeName(Me) & ".Remove"
+    GetIndex Key, i, , groupSlot, , posInGroup, , IgnoreErrors
+    If i = notFound Then
+        If IgnoreErrors Then Exit Function
+        #If StrictScriptingMode Then
+            Err.Raise 32811, , "Method 'Remove' of object 'IDictionary' failed"
+        #Else
+            Err.Raise 9, TypeName(Me) & ".Remove"
+        #End If
+    End If
+    Remove = True
     If Vars.UsedCount = 1 Then
         Init
-        Exit Sub
+        Exit Function
     End If
     '
     ClearMapIndex groupSlot, posInGroup
@@ -1331,7 +1350,7 @@ Public Sub Remove(ByRef Key As Variant)
                 #End If
             End If
         End If
-        Exit Sub
+        Exit Function
     End If
     If Vars.Count > Vars.UsedCount Then
         i = lastPos - 1
@@ -1359,7 +1378,7 @@ Public Sub Remove(ByRef Key As Variant)
         Vars.Keys(lastPos).Value = Empty
     #End If
     Vars.Count = Vars.Count - 1
-End Sub
+End Function
 
 Public Sub RemoveAll()
     Init
