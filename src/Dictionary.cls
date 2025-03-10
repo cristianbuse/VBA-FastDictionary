@@ -104,7 +104,7 @@ Option Compare Binary
 'GLOBAL_... can be set in the Project Properties under
 ' Conditional Compilation Arguments
 #Const StrictScriptingMode = LOCAL_STRICT_SCRIPTING_MODE Or _
-                             GLOBAL_STRICT_SCRIPTING_MODE
+                             FASTDICT_STRICT_SCRIPTING_MODE
 
 #If Mac Then
     #If VBA7 Then
