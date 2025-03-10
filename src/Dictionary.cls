@@ -402,7 +402,7 @@ Attribute Item.VB_UserMemId = 0
         .stItemGet.currentCallType = earlyBound
     End With
 #End If
-    Dim i As Long: i = GetIndex(Key)
+    Dim i As Long: GetIndex Key, i
     '
 #If StrictScriptingMode Then
     'https://github.com/cristianbuse/VBA-FastDictionary/discussions/28
@@ -429,7 +429,7 @@ Public Property Let Item(ByRef Key As Variant, ByRef Item As Variant)
     If IsObject(Item) Or (VarType(Item) = vbDataObject) Then
         Err.Raise 450, TypeName(Me) & ".Item", "'Set' is required"
     End If
-    Dim i As Long: i = GetIndex(Key)
+    Dim i As Long: GetIndex Key, i
     If i > notFound Then
         #If x64 Then
             Vars.Meta(i) = Vars.Meta(i) And keyBitMask
@@ -442,7 +442,7 @@ Public Property Let Item(ByRef Key As Variant, ByRef Item As Variant)
     End If
 End Property
 Public Property Set Item(ByRef Key As Variant, ByRef Item As Object)
-    Dim i As Long: i = GetIndex(Key)
+    Dim i As Long: GetIndex Key, i
     If i > notFound Then
         #If x64 Then
             Vars.Meta(i) = Vars.Meta(i) Or isItemObjBit
@@ -518,9 +518,9 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
     Dim controlByte As Long
     '
     If Vars.AllowDuplicateKeys Then
-        GetIndex Key, hVal, groupSlot, controlByte, True
+        GetIndex Key, , hVal, groupSlot, controlByte, hashOnly:=True
     Else
-        i = GetIndex(Key, hVal, groupSlot, controlByte)
+        GetIndex Key, i, hVal, groupSlot, controlByte
         If i > notFound Then Err.Raise 457, TypeName(Me) & ".Add"
     End If
     '
@@ -644,7 +644,7 @@ Private Sub InitHashMap(ByVal newGroupCount As Long)
     Vars.Hash.ControlMask = Vars.Hash.GroupCount * &H7F&
 End Sub
 
-'Returns non-zero data index if key is found
+'Returns (By Ref) non-zero data index if key is found
 'Returns (ByRef) a Long Integer / DWORD - 32 bits little-endian (LE) hash value
 'Sign bit not used so that the following operations are straightforward:
 '   - right bit shifting using \ operator and powers of 2
@@ -661,12 +661,13 @@ End Sub
 '|1|               | 0| 0|       - Input is Null (bit 0 is 1 - vbNull)
 '|2|               | 0| 0|       - Key was removed (HashMeta.hmRemoved)
 '|?|?|?|?|...| ?| ?| 0| 0|       - Input is +Inf or -Inf or QNaN or SNaN
-Private Function GetIndex(ByRef Key As Variant _
-                        , Optional ByRef hVal As Long _
-                        , Optional ByRef groupSlot As Long _
-                        , Optional ByRef controlByte As Long _
-                        , Optional ByRef posInGroup As Long _
-                        , Optional ByVal hashOnly As Boolean = False) As Long
+Private Sub GetIndex(ByRef Key As Variant _
+                   , Optional ByRef outIndex As Long _
+                   , Optional ByRef hVal As Long _
+                   , Optional ByRef groupSlot As Long _
+                   , Optional ByRef controlByte As Long _
+                   , Optional ByRef posInGroup As Long _
+                   , Optional ByVal hashOnly As Boolean = False)
     #If (x32) Or Mac Then
         Const vbLongLong = 20
     #End If
@@ -781,7 +782,7 @@ Private Function GetIndex(ByRef Key As Variant _
     'Calculate sub-hashes
     groupSlot = hVal Mod Vars.Hash.GroupCount
     controlByte = (hVal And Vars.Hash.ControlMask) \ Vars.Hash.GroupCount
-    If hashOnly Then Exit Function
+    If hashOnly Then Exit Sub
     '
     #If x64 Then
         Const signBit As LongLong = &H8000000000000000^
@@ -816,31 +817,31 @@ Private Function GetIndex(ByRef Key As Variant _
                                  (-matches And matches) Mod positionPrime))
                     matches = matches Xor Mem.Look(0).PositionMask(posInGroup)
                 End If
-                GetIndex = .Index(posInGroup)
+                outIndex = .Index(posInGroup)
 #If x64 Then
-                If (Vars.Meta(GetIndex) And keyBitMask) = hVal Then
+                If (Vars.Meta(outIndex) And keyBitMask) = hVal Then
                     If vt = vbString And (Vars.Compare > vbBinaryCompare) Then
-                        If StrComp(Vars.Keys(GetIndex) _
-                                 , Key, Vars.Compare) = 0 Then Exit Function
+                        If StrComp(Vars.Keys(outIndex) _
+                                 , Key, Vars.Compare) = 0 Then Exit Sub
                     ElseIf vt = vbObject Then 'vbDataObject was replaced
-                        If Vars.Keys(GetIndex) Is Key Then Exit Function
+                        If Vars.Keys(outIndex) Is Key Then Exit Sub
                     ElseIf hVal < HashMeta.[_modHM] Then 'Already matched
-                        Exit Function
+                        Exit Sub
                     Else 'Number, Error or case-sensitive Text
-                        If Vars.Keys(GetIndex) = Key Then Exit Function
+                        If Vars.Keys(outIndex) = Key Then Exit Sub
                     End If
                 End If
 #Else
-                If Vars.Keys(GetIndex).Meta = hVal Then
+                If Vars.Keys(outIndex).Meta = hVal Then
                     If vt = vbString And (Vars.Compare > vbBinaryCompare) Then
-                        If StrComp(Vars.Keys(GetIndex).Value _
-                                 , Key, Vars.Compare) = 0 Then Exit Function
+                        If StrComp(Vars.Keys(outIndex).Value _
+                                 , Key, Vars.Compare) = 0 Then Exit Sub
                     ElseIf vt = vbObject Then 'vbDataObject was replaced
-                        If Vars.Keys(GetIndex).Value Is Key Then Exit Function
+                        If Vars.Keys(outIndex).Value Is Key Then Exit Sub
                     ElseIf hVal < HashMeta.[_modHM] Then 'Already matched
-                        Exit Function
+                        Exit Sub
                     Else 'Number, Error or case-sensitive Text
-                        If Vars.Keys(GetIndex).Value = Key Then Exit Function
+                        If Vars.Keys(outIndex).Value = Key Then Exit Sub
                     End If
                 End If
 #End If
@@ -849,8 +850,8 @@ Private Function GetIndex(ByRef Key As Variant _
         End With
         groupSlot = (groupSlot + 1) Mod Vars.Hash.GroupCount
     Loop Until groupSlot = startSlot
-    GetIndex = notFound
-End Function
+    outIndex = notFound
+End Sub
 
 'Values greater than 2 can be used to compare using specific Locale IDs (LCID)
 'https://learn.microsoft.com/en-us/office/vba/Language/Reference/User-Interface-Help/comparemode-property
@@ -893,11 +894,12 @@ Public Property Get Count() As Long
 End Property
 
 Public Function Exists(ByRef Key As Variant) As Boolean
-    Exists = (GetIndex(Key) > notFound)
+    Dim i As Long: GetIndex Key, i
+    Exists = (i > notFound)
 End Function
 
 Public Function Index(ByRef Key As Variant) As Long
-    Dim i As Long: i = GetIndex(Key)
+    Dim i As Long: GetIndex Key, i
     If i = notFound Then Err.Raise 9
     '
     If Vars.UsedCount < Vars.Count Then
@@ -1041,8 +1043,9 @@ Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     Dim controlByte As Long
     Dim i As Long
     '
-    If GetIndex(NewKey, hVal, , controlByte) > notFound Then Err.Raise 457
-    i = GetIndex(OldKey, , groupSlot, , posInGroup)
+    GetIndex NewKey, i, hVal, , controlByte
+    If i > notFound Then Err.Raise 457
+    GetIndex OldKey, i, , groupSlot, , posInGroup
     '
     'We raise error manually to avoid issue #14
     'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
@@ -1250,7 +1253,7 @@ Public Sub Remove(ByRef Key As Variant)
     Dim j As Long
     Dim ptr As LongPtr
     '
-    i = GetIndex(Key, , groupSlot, , posInGroup)
+    GetIndex Key, i, , groupSlot, , posInGroup
     If i = notFound Then Err.Raise 9, TypeName(Me) & ".Remove"
     If Vars.UsedCount = 1 Then
         Init
@@ -1790,7 +1793,7 @@ Public Function Factory() As Dictionary
 End Function
 
 Public Property Get HashVal(ByRef Key As Variant) As Long
-    GetIndex Key, HashVal, hashOnly:=True
+    GetIndex Key, , HashVal, hashOnly:=True
 End Property
 
 Private Function DictEnum() As IUnknown
