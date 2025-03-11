@@ -19,6 +19,7 @@ Private Const unsupportedKeyErr As Long = invalidCallErr
 Private Const keyOrIndexNotFoundErr As Long = 9
 Private Const setMissingErr As Long = 450
 Private Const duplicatedKeyErr As Long = 457
+Private Const failedScriptingErr As Long = 32811
 
 Public Sub RunAllDictionaryTests()
     TestEmptyDictionary
@@ -86,12 +87,16 @@ Private Sub TestDictionaryAdd()
     Next v
     On Error GoTo 0
     '
-    d.Add 11, Array()
-    d.Add 12, New Dictionary
-    d.Add "Test Add", Nothing
-    d.Add "test add", New Collection
-    d.Add "test add" & vbNewLine, 1
-    d.Add "test add" & vbNullChar, 1
+    For Each v In Array(CLng(3), Array(), 0, -1, Array(1, 2, 3), Empty)
+        Debug.Assert Not d.Add(v, v, IgnoreErrors:=True)
+    Next v
+    '
+    Debug.Assert d.Add(11, Array())
+    Debug.Assert d.Add(12, New Dictionary)
+    Debug.Assert d.Add("Test Add", Nothing)
+    Debug.Assert d.Add("test add", New Collection)
+    Debug.Assert d.Add("test add" & vbNewLine, 1)
+    Debug.Assert d.Add("test add" & vbNullChar, 1)
 End Sub
 Private Function GetDefaultInterface(ByVal obj As stdole.IUnknown) As Object
     Set GetDefaultInterface = obj
@@ -257,6 +262,8 @@ Private Sub TestDictionaryExists()
     d.Exists Array()
     Debug.Assert Err.Number = unsupportedKeyErr
     On Error GoTo 0
+    '
+    Debug.Assert Not d.Exists(Array(), True)
 End Sub
 
 '@Description("IEEE754 +inf")
@@ -362,6 +369,14 @@ Private Sub TestDictionaryHashVal()
     d.CompareMode = vbTextCompare
     Debug.Assert d.HashVal("AA") = d.HashVal("aa")
     Debug.Assert d.HashVal("AAAAAA") = d.HashVal("AAaAAA")
+    '
+    '
+    On Error Resume Next
+    i = d.HashVal(Array())
+    Debug.Assert Err.Number = unsupportedKeyErr
+    On Error GoTo 0
+    '
+    Debug.Assert d.HashVal(Array(), True) = 0
 End Sub
 
 Private Sub TestDictionaryIndex()
@@ -379,11 +394,22 @@ Private Sub TestDictionaryIndex()
     Next i
     '
     Debug.Assert d.Index(25000) = 7000
+    Debug.Assert d.Index(30000) = 12000
+    '
+    For i = 30000 To 45000
+        d.Remove i
+    Next i
+    '
+    Debug.Assert d.Index(25000) = 7000
+    Debug.Assert d.Index(28000) = 10000
+    Debug.Assert d.Index(45001) = 12000
     '
     On Error Resume Next
     d.Index 15000
     Debug.Assert Err.Number = keyOrIndexNotFoundErr
     On Error GoTo 0
+    '
+    Debug.Assert d.Index(15000, True) = -1
 End Sub
 
 Private Sub TestDictionaryItem()
@@ -974,7 +1000,11 @@ Private Sub TestDictionaryRemove()
     '
     On Error Resume Next
     d.Remove Empty
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     On Error GoTo 0
     '
     For i = 1 To 10
@@ -1005,22 +1035,37 @@ Private Sub TestDictionaryRemove()
     '
     On Error Resume Next
     d.Remove 1
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     Err.Clear
     d.Remove CStr(1)
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     On Error GoTo 0
+    '
+    Debug.Assert Not d.Remove(1, IgnoreErrors:=True)
+    Debug.Assert Not d.Remove(CStr(1), IgnoreErrors:=True)
     '
     d.Add Null, Empty
     d.Add Empty, Null
     '
     Debug.Assert d.Exists(Null)
-    d.Remove Null
+    Debug.Assert d.Remove(Null, True)
     Debug.Assert Not d.Exists(Null)
     '
     On Error Resume Next
-    d.Remove Null
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    d.Remove Null, False
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     Err.Clear
     d.Remove Array()
     Debug.Assert Err.Number = unsupportedKeyErr
@@ -1126,7 +1171,7 @@ Private Sub TestDefault2()
     Dim d As New Dictionary
     Dim i As Long
     Dim v As Variant
-    Dim w As Variant
+    Dim W As Variant
     Dim o As Object
     Const iterations As Long = 10000
     '
@@ -1141,15 +1186,15 @@ Private Sub TestDefault2()
         v = o(1) 'Late bound
     Next i
     '
-    Set w = d
+    Set W = d
     For i = 1 To iterations
-        v = w(1) 'Late bound Variant
+        v = W(1) 'Late bound Variant
     Next i
     '
     For i = 1 To iterations
         v = d(1) 'Early bound
         v = o(1) 'Late bound
-        v = w(1) 'Late bound Variant
+        v = W(1) 'Late bound Variant
     Next i
 End Sub
 
