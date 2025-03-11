@@ -151,6 +151,7 @@ Private Enum InternalConstants 'Hides constants from Locals window
 #End If
     prevOffset = ptrSize 'Previous instance pointer immediately after vTable
     notFound = -1
+    noHashSupport = -2
     intSize = 2
     intsPerDouble = 4
     groupSize = ptrSize
@@ -528,8 +529,16 @@ Private Sub Init(Optional ByVal newGroupCount As Long = initialGroupCount)
     Vars.Enums.hasEnum = False
 End Sub
 
-'Raises Error 457 if a duplicated key was specified
-Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
+'Adds a key-item pair
+'Returns
+' - True, if pair is added
+' - False, if duplicated / invalid key AND IgnoreErrors = True
+'If IgnoreErrors = False, raises error:
+' -   5 if an Array or UDT is passed as Key
+' - 457 if a duplicated key was specified AND AllowDuplicateKeys = False
+Public Function Add(ByRef Key As Variant _
+                  , ByRef Item As Variant _
+                  , Optional ByVal IgnoreErrors As Boolean = False) As Boolean
     Dim hVal As Long
     Dim groupSlot As Long
     Dim i As Long
@@ -540,14 +549,15 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
         groupSlot = Vars.AddHash.groupSlot
         controlByte = Vars.AddHash.controlByte
         Vars.AddHash.isSet = False
-    ElseIf Vars.AllowDuplicateKeys Then
-        GetIndex Key, i, hVal, groupSlot, controlByte, hashOnly:=True
     Else
-        GetIndex Key, i, hVal, groupSlot, controlByte
-        If i > notFound Then
+        GetIndex Key, i, hVal, groupSlot, controlByte, , Vars.AllowDuplicateKeys _
+                                                       , IgnoreErrors
+        If i <> notFound Then
+            If IgnoreErrors Then Exit Function
             Err.Raise 457, TypeName(Me) & ".Add"
         End If
     End If
+    Add = True
     '
     If Vars.Count > Vars.UBound Then
         Vars.UBound = Vars.UBound * 2 + 1
@@ -629,7 +639,7 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
         .Meta = hVal
     End With
 #End If
-End Sub
+End Function
 
 'Rebuilds hash table using the stored hashes with metadata
 Private Sub Rehash(ByVal newGroupCount As Long)
@@ -770,7 +780,7 @@ Private Sub GetIndex(ByRef Key As Variant _
         Set iUnk = Nothing 'Because of Static but still faster than just Dim
     ElseIf vt > vbLongLong Then
         If IgnoreErrors Then
-            outIndex = notFound
+            outIndex = noHashSupport
             Exit Sub
         End If
         Err.Raise 5, , "Cannot hash an Array or User Defined Type"
@@ -814,7 +824,10 @@ Private Sub GetIndex(ByRef Key As Variant _
     'Calculate sub-hashes
     groupSlot = hVal Mod Vars.Hash.GroupCount
     controlByte = (hVal And Vars.Hash.ControlMask) \ Vars.Hash.GroupCount
-    If hashOnly Then Exit Sub
+    If hashOnly Then
+        outIndex = notFound
+        Exit Sub
+    End If
     '
     #If x64 Then
         Const signBit As LongLong = &H8000000000000000^
@@ -1283,7 +1296,7 @@ End Sub
 '   -     9: if StrictScriptingMode = False
 '   - 32811: if StrictScriptingMode = True
 Public Function Remove(ByRef Key As Variant _
-                     , Optional ByVal IgnoreErrors As Boolean) As Boolean
+                     , Optional ByVal IgnoreErrors As Boolean = False) As Boolean
     Dim groupSlot As Long
     Dim posInGroup As Long
     Dim lastPos As Long
@@ -1292,7 +1305,7 @@ Public Function Remove(ByRef Key As Variant _
     Dim ptr As LongPtr
     '
     GetIndex Key, i, , groupSlot, , posInGroup, , IgnoreErrors
-    If i = notFound Then
+    If i <= notFound Then
         If IgnoreErrors Then Exit Function
         #If StrictScriptingMode Then
             Err.Raise 32811, , "Method 'Remove' of object 'IDictionary' failed"
