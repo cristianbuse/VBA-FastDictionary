@@ -940,13 +940,22 @@ End Property
 
 Public Function Exists(ByRef Key As Variant _
                      , Optional ByVal IgnoreErrors As Boolean = False) As Boolean
-    Dim i As Long: GetIndex Key, i, , , , , , IgnoreErrors
+    Dim i As Long: GetIndex Key, i, IgnoreErrors:=IgnoreErrors
     Exists = (i > notFound)
 End Function
 
-Public Function Index(ByRef Key As Variant) As Long
-    Dim i As Long: GetIndex Key, i
-    If i = notFound Then Err.Raise 9
+'Returns -1 if invalid key and IgnoreErrors = True
+'Raises error 9 if invalid key and IgnoreErrors = False
+Public Function Index(ByRef Key As Variant _
+                    , Optional ByVal IgnoreErrors As Boolean = False) As Long
+    Dim i As Long: GetIndex Key, i, IgnoreErrors:=IgnoreErrors
+    If i <= notFound Then
+        If IgnoreErrors Then
+            Index = -1
+            Exit Function
+        End If
+        Err.Raise 9
+    End If
     '
     If Vars.UsedCount < Vars.Count Then
         Index = i - CountRemoved(i)
