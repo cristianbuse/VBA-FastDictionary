@@ -938,8 +938,9 @@ Public Property Get Count() As Long
     Count = Vars.UsedCount
 End Property
 
-Public Function Exists(ByRef Key As Variant) As Boolean
-    Dim i As Long: GetIndex Key, i
+Public Function Exists(ByRef Key As Variant _
+                     , Optional ByVal IgnoreErrors As Boolean = False) As Boolean
+    Dim i As Long: GetIndex Key, i, , , , , , IgnoreErrors
     Exists = (i > notFound)
 End Function
 
@@ -1851,8 +1852,9 @@ Public Function Factory() As Dictionary
     Set Factory = New Dictionary
 End Function
 
-Public Property Get HashVal(ByRef Key As Variant) As Long
-    GetIndex Key, , HashVal, hashOnly:=True
+Public Property Get HashVal(ByRef Key As Variant _
+                          , Optional ByVal IgnoreErrors As Boolean = False) As Long
+    GetIndex Key, , HashVal, hashOnly:=True, IgnoreErrors:=IgnoreErrors
 End Property
 
 Private Function DictEnum() As IUnknown
