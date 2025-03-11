@@ -967,13 +967,14 @@ Private Function CountRemoved(ByVal upTo As Long) As Long
     Dim i As Long
     Dim startIndex As Long
     Dim endIndex As Long
-    Dim isFirstHalf As Boolean: isFirstHalf = (upTo < Vars.Count \ 2)
+    Dim isSecondHalf As Boolean: isSecondHalf = (upTo > Vars.Count \ 2)
+    Dim totalRemoved As Long:    totalRemoved = Vars.Count - Vars.UsedCount
     '
-    If isFirstHalf Then
-        endIndex = upTo - 1
-    Else
+    If isSecondHalf Then
         startIndex = upTo + 1
         endIndex = Vars.Count
+    Else
+        endIndex = upTo - 1
     End If
     For i = startIndex To endIndex
         #If x64 Then
@@ -981,10 +982,9 @@ Private Function CountRemoved(ByVal upTo As Long) As Long
         #Else
             If Vars.Keys(i).Meta = hmRemoved Then CountRemoved = CountRemoved + 1
         #End If
+        If CountRemoved = totalRemoved Then Exit For
     Next i
-    If Not isFirstHalf Then
-        CountRemoved = Vars.Count - Vars.UsedCount - CountRemoved
-    End If
+    If isSecondHalf Then CountRemoved = totalRemoved - CountRemoved
 End Function
 
 'Raises Error:
