@@ -90,6 +90,9 @@ Attribute VB_Exposed = False
 ''         - Returns the current % load for the hash map containing indexes
 ''    * AllowDuplicateKeys <Get/Let>
 ''         - Can only be changed if there are no stored items
+''    * StrictScriptingMode <Get>
+''         - Returns a boolean indicating if this class is fully compatible with
+''           Scripting.Dictionary. Can only be set via precompiler constants
 ''==============================================================================
 
 '@PredeclaredId
@@ -108,20 +111,19 @@ Option Compare Binary
 
 #If Mac Then
     #If VBA7 Then
-        Private Declare PtrSafe Function CopyMemory Lib "/usr/lib/libc.dylib" Alias "memmove" (Destination As Any, Source As Any, ByVal Length As LongPtr) As LongPtr
+        Private Declare PtrSafe Function memmove Lib "/usr/lib/libc.dylib" (Destination As Any, Source As Any, ByVal Length As LongPtr) As LongPtr
     #Else
-        Private Declare Function CopyMemory Lib "/usr/lib/libc.dylib" Alias "memmove" (Destination As Any, Source As Any, ByVal Length As Long) As Long
+        Private Declare Function memmove Lib "/usr/lib/libc.dylib" (Destination As Any, Source As Any, ByVal Length As Long) As Long
     #End If
 #Else 'Windows
     #If VBA7 Then
-        Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
-        Private Declare PtrSafe Function LocalSize Lib "kernel32" (ByVal hMem As LongPtr) As Long
+        Private Declare PtrSafe Sub VariantCopy Lib "oleaut32.dll" (ByRef pvargDest As Variant, ByVal pvargSrc As LongPtr)
     #Else
-        Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As Long)
+        Private Declare Sub VariantCopy Lib "oleaut32.dll" (ByRef pvargDest As Variant, ByVal pvargSrc As Long)
     #End If
 #End If
 #If TWINBASIC Then
-    Private Declare PtrSafe Sub VariantCopy Lib "oleaut32.dll" (ByRef pvargDest As Variant, ByVal pvargSrc As LongPtr)
+    Private Declare PtrSafe Sub RtlMoveMemory Lib "kernel32" (Destination As Any, Source As Any, ByVal Length As LongPtr)
 #End If
 #If VBA7 = 0 Then
     Private Enum LongPtr
@@ -483,13 +485,14 @@ Public Sub IEnumVARIANT_Next(ByVal celt As Long _
     Dim currItemPtr As LongPtr
     Dim nextItemPtr As LongPtr
     Dim vtbl As LongPtr
+    Dim temp As LongPtr
     #If x64 Then
         Const nextItemOffset As LongLong = 40
     #Else
         Const nextItemOffset As Long = 24
     #End If
     '
-    CopyMemory currItemPtr, ByVal currItemAddr, ptrSize
+    GetMemPtr currItemAddr, currItemPtr
     If currItemPtr = NullPtr Then
         rgVar = Empty
         Exit Sub
@@ -497,14 +500,16 @@ Public Sub IEnumVARIANT_Next(ByVal celt As Long _
     '
     VariantCopy rgVar, currItemPtr
     If VarPtr(pceltFetched) = NullPtr Then
-        CopyMemory nextItemPtr, ByVal currItemPtr + nextItemOffset, ptrSize
+        GetMemPtr currItemPtr + nextItemOffset, nextItemPtr
         If nextItemPtr = NullPtr Then 'Restore original vtbl
-            CopyMemory vtbl, ByVal ptr, ptrSize
-            CopyMemory ByVal ptr, ByVal vtbl + ptrSize * 7, ptrSize
+            GetMemPtr ptr, vtbl
+            GetMemPtr vtbl + ptrSize * 7, temp
+            PutMemPtr ptr, temp
         End If
-        CopyMemory ByVal currItemAddr, nextItemPtr, ptrSize
+        PutMemPtr currItemAddr, nextItemPtr
     Else
-        CopyMemory ByVal currItemAddr, ByVal currItemPtr + nextItemOffset, ptrSize
+        GetMemPtr currItemPtr + nextItemOffset, temp
+        PutMemPtr currItemAddr, temp
         pceltFetched = 1
     End If
 End Sub
@@ -1510,8 +1515,13 @@ Friend Sub InitStructs(ByRef dict As Dictionary _
         saPtrs(3) = VarPtr(h.saP)
         InitSafeArray h.saP, ptrSize
         '
-        'The only API call on Windows VB*
-        CopyMemory ByVal VarPtr(Mem) + ptrSize * 3, saPtrs(3), ptrSize
+        #If Mac Then
+            memmove ByVal VarPtr(Mem) + ptrSize * 3, saPtrs(3), ptrSize
+        #ElseIf TWINBASIC Then
+            PutMemPtr VarPtr(Mem) + ptrSize * 3, saPtrs(3)
+        #Else
+            MemLongPtr(VarPtr(Mem) + ptrSize * 3) = saPtrs(3)
+        #End If
         '
         'Store virtual table pointer for finding terminated instances
         h.saP.pvData = Vars.Dealloc.ThisPtr
@@ -1667,7 +1677,7 @@ Friend Sub InitStructs(ByRef dict As Dictionary _
     #End If
     '
 #If Mac Then
-    CopyMemory ByVal VarPtr(m), saPtrs(0), ptrSize * 4
+    memmove ByVal VarPtr(m), saPtrs(0), ptrSize * 4
 #Else
     If h.isScrAvailable Then
         If v.Compare <= vbTextCompare Then v.LocaleID = h.lcid
@@ -1749,6 +1759,45 @@ Initialized:
 #End If
 End Sub
 
+'Avoid Defender alerts by not using RtlMoveMemory
+#If Windows And FastDealloc Then
+Public Property Let MemLongPtr(ByVal memAddress As LongPtr _
+                             , ByVal newValue As LongPtr)
+#If Win64 Then 'Define Variant Size in # pointers
+    Const ptrsNeeded As Long = 3 '8 * 3 = 24
+#Else
+    Const ptrsNeeded As Long = 4 '4 * 4 = 16
+#End If
+    Const VT_BYREF As Long = &H4000
+    Dim memValue As Variant
+    Dim remoteVT As Variant
+    Dim fakeVariant(0 To ptrsNeeded - 1) As LongPtr 'Avoid UDT
+    '
+    fakeVariant(ptrsNeeded - 2) = VarPtr(memValue)
+    fakeVariant(0) = vbInteger + VT_BYREF
+    VariantCopy remoteVT, VarPtr(fakeVariant(0)) 'Init VarType ByRef
+    '
+#If Win64 Then 'Cannot assign LongLong ByRef
+    Dim c As Currency
+    RemoteAssign memValue, VarPtr(newValue), remoteVT, vbCurrency + VT_BYREF, c, memValue
+    RemoteAssign memValue, memAddress, remoteVT, vbCurrency + VT_BYREF, memValue, c
+#Else 'Can assign Long ByRef
+    RemoteAssign memValue, memAddress, remoteVT, vbLong + VT_BYREF, memValue, newValue
+#End If
+End Property
+Private Sub RemoteAssign(ByRef memValue As Variant _
+                       , ByRef memAddress As LongPtr _
+                       , ByRef remoteVT As Variant _
+                       , ByVal newVT As VbVarType _
+                       , ByRef targetVariable As Variant _
+                       , ByRef newValue As Variant)
+    memValue = memAddress
+    remoteVT = newVT
+    targetVariable = newValue
+    remoteVT = vbEmpty
+End Sub
+#End If
+
 'https://stackoverflow.com/a/9516565/8488913
 Private Property Get InIde() As Boolean
     Debug.Assert SetTrue(InIde)
@@ -1774,6 +1823,7 @@ Private Sub FixStackBugs(ByRef h As Globals)
     Dim newEnumPtr As LongPtr
     Dim itemGetPtr As LongPtr
     Dim terminatePtr As LongPtr
+    Dim iClassModuleEvtPtr As LongPtr
     '
     'NewEnum
     h.saP.pvData = Vars.Dealloc.ThisPtr 'Dictionary
@@ -1785,8 +1835,10 @@ Private Sub FixStackBugs(ByRef h As Globals)
     itemGetPtr = Mem.RPtr(0)
     '
     '_Terminate address
-    h.saP.pvData = Vars.Dealloc.ThisPtr + LocalSize(Vars.Dealloc.ThisPtr) _
-                                        - ptrSize * 3 'IClassModuleEvt
+    'We avoid Defender alert by not using LocalSize (kernel.dll)
+    'Needs adjusting for if implementing interfaces or events
+    iClassModuleEvtPtr = Vars.Dealloc.ThisPtr + 96 + LenB(Vars) + LenB(Mem)
+    h.saP.pvData = iClassModuleEvtPtr
     h.saP.pvData = Mem.RPtr(0) + ptrSize * opNumTerminate
     terminatePtr = Mem.RPtr(0)
     '
@@ -1868,6 +1920,7 @@ End Property
 
 Private Function DictEnum() As IUnknown
     Dim hadEnum As Boolean
+    Dim i As Long
     '
     If Not Vars.IsInitialized Then Exit Function 'If called from IDE before Init
     With Vars.Enums
@@ -1885,18 +1938,17 @@ Private Function DictEnum() As IUnknown
     Dim vtblptr As LongPtr
     '
     If vtbl(0) = NullPtr Then
-        CopyMemory vtblptr, ByVal tempPtr, ptrSize
-        CopyMemory vtbl(0), ByVal vtblptr, ptrSize * 7 'Copy original virtual table
+        GetMemPtr tempPtr, vtblptr
+        RtlMoveMemory vtbl(0), ByVal vtblptr, ptrSize * 7 'Copy original virtual table
         vtbl(7) = vtblptr 'Save original vtbl at additional position
-        CopyMemory vtblptr, ByVal Vars.Dealloc.ThisPtr, ptrSize
-        CopyMemory vtbl(3), ByVal vtblptr + ptrSize * 11, ptrSize 'Replace 'Next'
+        GetMemPtr Vars.Dealloc.ThisPtr, vtblptr
+        GetMemPtr vtblptr + ptrSize * 11, vtbl(3) 'Replace 'Next'
     End If
     '
     'Swap original vTable with our own
-    CopyMemory ByVal tempPtr, VarPtr(vtbl(0)), ptrSize
+    PutMemPtr tempPtr, VarPtr(vtbl(0))
 #End If
     '
-    Dim i As Long
     Dim hasGaps As Boolean: hasGaps = (Vars.UsedCount < Vars.Count)
     '
     If hasGaps Then

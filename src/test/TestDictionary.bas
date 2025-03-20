@@ -1171,7 +1171,7 @@ Private Sub TestDefault2()
     Dim d As New Dictionary
     Dim i As Long
     Dim v As Variant
-    Dim W As Variant
+    Dim w As Variant
     Dim o As Object
     Const iterations As Long = 10000
     '
@@ -1186,15 +1186,15 @@ Private Sub TestDefault2()
         v = o(1) 'Late bound
     Next i
     '
-    Set W = d
+    Set w = d
     For i = 1 To iterations
-        v = W(1) 'Late bound Variant
+        v = w(1) 'Late bound Variant
     Next i
     '
     For i = 1 To iterations
         v = d(1) 'Early bound
         v = o(1) 'Late bound
-        v = W(1) 'Late bound Variant
+        v = w(1) 'Late bound Variant
     Next i
 End Sub
 
