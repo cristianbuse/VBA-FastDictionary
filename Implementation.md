@@ -7,10 +7,12 @@ This Dictionary does not require any DLL references or any kind of external libr
 ## Table of Contents
 
 - [Compatibility with Scripting.Dictionary](#compatibility-with-scriptingdictionary)
+  - [StrictScriptingMode](#strictscriptingmode)
   - [Hashing Numbers incompatibility](#hashing-numbers-incompatibility)
   - [Error numbers incompatibility](#error-numbers-incompatibility)
   - [Item (Get) incompatibility](#item-get-incompatibility)
   - [Zero-length text, 0 (zero) and Empty incompatibility](#zero-length-text-0-zero-and-empty-incompatibility)
+  - [Return type for Items and Keys incompatibility](#return-type-for-items-and-keys-incompatibility)
 - [Hashing](#hashing)
   - [Number Hashing](#number-hashing)
   - [Object Hashing](#object-hashing)
@@ -49,7 +51,37 @@ This Dictionary does not require any DLL references or any kind of external libr
 
 The Dictionary presented in this repository is designed to be a drop-in replacement for ```Scripting.Dictionary``` (Microsoft Scripting Runtime - scrrun.dll on Windows). However, there are a few differences, and their purpose is to make this Dictionary the better choice from a functionality perspective.
 
+The differences are:
+- Hashing Numbers incompatibility
+- Error numbers incompatibility
+- ```Item``` (Get) incompatibility
+- Zero-length text, 0 (zero) and Empty incompatibility
+- Return type for ```Items``` and ```Keys```
+
+### StrictScriptingMode
+
+Users can still achieve compatibility with ```Scripting.Dictionary``` via ```StrictScriptingMode```. To turn on, do one of the following, or both:
+1. Change the precompiler constant ```#Const LOCAL_STRICT_SCRIPTING_MODE``` to ```True``` at the top of the ```Dictionary``` class. However, with a new version of the ```Dictionary``` this would have to be repeated
+2. Add a ```FASTDICT_STRICT_SCRIPTING_MODE = 1``` to the Conditional Compilation Arguments under Project Properties:
+![condCompArgs](https://github.com/user-attachments/assets/919fcadc-8ba7-40c1-99e6-79f8e78a67c5)  
+This will remain in effect even if a new version of the class is imported
+
+Note the following about ```StrictScriptingMode```:
+- if is off / ```False``` by default. This is because the original ```Scripting.Dictionary``` behaviour is misleading
+- cannot be changed at runtime. The available ```Property``` with the same name is ```Get```-only
+- solves only the following 3 out of 5 differences mentioned above:
+  - Error numbers incompatibility
+  - Item (Get) incompatibility
+  - Return type for ```Items``` and ```Keys```
+- it does not solve the remaining 2 differences:
+  - Hashing Numbers incompatibility. Because ```Scripting.Dictionary``` hashes numbers outside the -9,999,999 to 9,999,999 range to a value of 0, and it would make no sense to carry this limitation forward even in compatibility mode. See more below
+  - Zero-length text, 0 (zero) and Empty incompatibility. Because ```Scripting.Dictionary``` does not allow all 3 at the same time and it depends on the order being added. This is a 'bug' and should not be relied upon even in compatibility mode
+
+For more details please visit [discussion 28](https://github.com/cristianbuse/VBA-FastDictionary/discussions/28).
+
 ### Hashing Numbers incompatibility
+
+Please note, turning ```StrictScriptingMode``` to on / ```True``` does nothing in regards to hashing numbers.
 
 The ```Scripting.Dictionary``` casts all the keys of type number to ```Single``` and only then hashes the values. This can be easily checked with the following code snippet:
 
@@ -117,15 +149,29 @@ However, the new Dictionary (this repo) casts ```Single``` to ```Double```. This
 
 ### Error numbers incompatibility
 
-This Dictionary only raises errors 5, 9, 450 and 457. For example Scripting.Dictionary raises error 32811 if calling ```Remove``` with a key that does not exist while this Dictionary raises error 9 (Subscript out of Range).
+This Dictionary only raises errors 5, 9, 450 and 457 when ```StrictScriptingMode``` is off / ```False``` (default).
+
+When ```StrictScriptingMode``` is on / ```True```, this Dictionary matches ```Scripting.Dictionary``` and raises error ```32811``` when:
+- calling ```Remove``` with a key that does not exist
+- calling ```Key``` with an ```OldKey``` that does not exist
+
+In both cases, this Dictionary raises error 9 (Subscript out of range) when ```StrictScriptingMode``` is off / ```False```.
 
 ### Item (Get) incompatibility
 
 When calling the ```Item``` (Get) property with a key that does not exist, the ```Scripting.Dictionary``` adds a new key-item pair where the key is the key that did not exist previously, and the item is ```Empty```. This kind of behaviour makes sense in the ```Let``` or ```Set``` counterparts of the ```Item``` property - which is why this Dictionary emulates the same behaviour. However, for the ```Get``` property this does not make much sense. On the contrary, it's misleading. Moreover, most likely no one would ever rely on this kind of functionality considering the ```Exists``` method does not throw an error if avoiding errors is the goal.
 
-So, this Dictionary throws error 9 if ```Item``` (Get) is called with a key that is not part of the dictionary.
+So, by default, this Dictionary throws error 9 if ```Item``` (Get) is called with a key that is not part of the dictionary.
+
+However, there are 2 ways to replicate the ```Scripting.Dictionary``` behaviour:
+1. Turn ```StrictScriptingMode``` to on / ```True``` using the precompile options mentioned above
+2. Turn ```CreateEmptyItemIfMissingKey``` to ```True``` at runtime, anytime, regardless if the Dictionary instance already has items or not
+
+Moreover, the new ```TryGetItem``` method complements ```Item``` (Get) if the user wants an error-free approach.
 
 ### Zero-length text, 0 (zero) and Empty incompatibility
+
+Please note, turning ```StrictScriptingMode``` to on / ```True``` does nothing - this Dictionary will still allow all 3 values at the same time.
 
 The way Scripting.Dictionary compares these 3 values is very misleading. Consider the next code snippet:
 ```VBA
@@ -172,6 +218,19 @@ Debug.Print dict("") '1
 Debug.Print dict(Empty) '2
 Debug.Print dict(0) '3
 ```
+
+### Return type for ```Items``` and ```Keys``` incompatibility
+
+For both the ```Items``` and ```Keys``` method, ```Scripting.Dictionary``` returns ```Variant```.
+
+By default, this Dictionary returns ```Variant()``` for both, for the following reasons:
+- It's slower to access members of an array wrapped in a ```Variant``` because VB* creates a temporary ```Variant``` each time you access a member - this is to account for the fact that the array can have various data types (e.g. ```Long()``` or ```String()```) and it is unknown until runtime. However, when using the exact type e.g. ```Variant()``` or ```Long()``` without wrapping in a ```Variant```, the access is done directly to the relevant memory where the data is stored
+- The user can still wrap the result in a ```Variant``` if they want to
+- Passing a ```Variant``` to a method expecting ```Variant()``` is not allowed, while passing ```Variant()``` to ```Variant``` is allowed
+- Both dictionaries always return an array of Variant(s) regardless of the items or keys. So, for clarity, best to be explicit with ```Variant()```
+- Assigining a ```Variant/Variant()``` to a ```Variant()``` makes a copy of the array while the reverse does not
+
+To replicate the ```Scripting.Dictionary``` behaviour, just turn ```StrictScriptingMode``` to on / ```True```.
 
 ## Hashing
 
@@ -698,6 +757,14 @@ Compared to a Scripting.Dictionary, this Dictionary has a few extra methods that
 - ```KeysItems2D``` - returns a 2D array of all the Keys and Items
 - ```PredictCount``` - if the number of Key-Item pairs is known upfront or if a good guess is possible, then a call to ```PredictCount``` with the expected number of pairs will prepare the internal size of the hash map so that there are no calls made to ```Rehash```. This results in better performance
 - ```Self``` - this method is useful in ```With New Dictionary``` code blocks
+- ```TryGetItem``` - returns a ```Boolean``` indicating if the given input Key exists while also returning the corresponding Item by reference. It does not throw an error
+
+Moreover, an ```Optional``` parameter called ```IgnoreErrors``` was added to existing methods. This allows the user to call the following methods without triggering an error, all while maintaining compatibility with previous versions:
+- ```Add``` -  allows calls like: ```If dict.Add(Key, Item, IgnoreErrors:=True) Then```. This has no speed impact compared to calling ```Add``` without the additional argument, while it is 70% faster than a call like ```If Not dict.Exists(...) Then dict.Add...```
+- ```Exists``` - this would raise an error with a key of type array while ```If dict.Exists(Array(), IgnoreErrors:=True) Then``` does not throw
+- ```Index```
+- ```HashVal```
+- ```Remove``` - allows calls like: ```If Not dict.Remove(Key, IgnoreErrors:=True) Then```
 
 ## OLE Automation
 
