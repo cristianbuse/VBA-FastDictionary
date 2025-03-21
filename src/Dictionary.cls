@@ -1108,8 +1108,11 @@ End Sub
 
 'Change an existing key value
 'Raises Error:
-'   -   9: invalid OldKey (key is not associated with any element)
-'   - 457: invalid NewKey (key is already associated with an element)
+' * invalid OldKey (key is not associated with any element). Error code:
+'   -     9: if StrictScriptingMode = False
+'   - 32811: if StrictScriptingMode = True
+' * invalid NewKey (key is already associated with an element). Error code:
+'   -   457
 Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     Dim hVal As Long
     Dim groupSlot As Long
@@ -1123,7 +1126,13 @@ Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     '
     'We raise error manually to avoid issue #14
     'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
-    If i = notFound Then Err.Raise 9
+    If i = notFound Then
+        #If StrictScriptingMode Then
+            Err.Raise 32811, , "Method 'Key' of object 'IDictionary' failed"
+        #Else
+            Err.Raise 9, TypeName(Me) & ".Key"
+        #End If
+    End If
     '
     'Replace Key and Meta while preserving Item
 #If x64 Then

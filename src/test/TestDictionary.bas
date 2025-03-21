@@ -633,10 +633,18 @@ Private Sub TestDictionaryKey()
     Debug.Assert Err.Number = duplicatedKeyErr
     Err.Clear
     d.Key("oldKeyX") = "newKey"
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     Err.Clear
     d.Key("oldkey") = "newKey"
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     Err.Clear
     d.Key(Array()) = "newKey"
     Debug.Assert Err.Number = unsupportedKeyErr
@@ -669,7 +677,11 @@ Private Sub TestDictionaryKey()
     Debug.Assert Err.Number = duplicatedKeyErr
     Err.Clear
     d.Key("oldKeyX") = "newkey"
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     Err.Clear
     d.Key("oldkey") = "newKey"
     Debug.Assert Err.Number = 0
