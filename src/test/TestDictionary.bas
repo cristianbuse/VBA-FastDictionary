@@ -45,6 +45,7 @@ Public Sub RunAllDictionaryTests()
     TestDictionaryRemoveAll
     TestDictionarySelf
     TestDictionaryStackFixes
+    TestDictionaryTryGetItem
     Debug.Print "Finished running tests at " & Now()
 End Sub
 
@@ -469,6 +470,21 @@ Private Sub TestDictionaryItem()
         v = d.Item("test")
         Debug.Assert Err.Number = keyOrIndexNotFoundErr
         For i = 100 To 105
+            Err.Clear
+            v = d.Item(i)
+            Debug.Assert Err.Number = keyOrIndexNotFoundErr
+        Next i
+        On Error GoTo 0
+        '
+        d.CreateEmptyItemIfMissingKey = True
+        Debug.Assert IsEmpty(d.Item("test"))
+        For i = 100 To 105
+            Debug.Assert IsEmpty(d.Item(i))
+        Next i
+        '
+        d.CreateEmptyItemIfMissingKey = False
+        On Error Resume Next
+        For i = 106 To 200
             Err.Clear
             v = d.Item(i)
             Debug.Assert Err.Number = keyOrIndexNotFoundErr
@@ -1299,3 +1315,14 @@ Private Sub TestForEach3()
     Set c = Nothing
 End Sub
 #End If
+
+Private Sub TestDictionaryTryGetItem()
+    Dim d As New Dictionary
+    Dim v As Variant
+    '
+    Debug.Assert Not d.TryGetItem("missing", v)
+    '
+    d.Add "key", 1
+    Debug.Assert d.TryGetItem("key", v)
+    Debug.Assert v = 1
+End Sub

@@ -67,6 +67,9 @@ Attribute VB_Exposed = False
 ''         - Removes all Key-Item pairs
 ''    * Self
 ''         - Self instance - useful in 'With New Dictionary' code blocks
+''    * TryGetItem
+''         - Returns a Boolean indicating if the given input Key exists while
+''           also returning the corresponding Item by reference
 '' Properties:
 ''    * CompareMode <Get/Let>
 ''         - Can only be changed if there are no stored items
@@ -93,6 +96,11 @@ Attribute VB_Exposed = False
 ''    * StrictScriptingMode <Get>
 ''         - Returns a boolean indicating if this class is fully compatible with
 ''           Scripting.Dictionary. Can only be set via precompiler constants
+''         - Affects Item (Get) and return type for Items / Keys
+''    * CreateEmptyItemIfMissingKey <Get/Let>
+''         - False (Default). If StrictScriptingMode is also False then
+''           Item (Get) will throw an error if Key is missing
+''         - True. Item (Get) will add a missing Key and an Empty Item
 ''==============================================================================
 
 '@PredeclaredId
@@ -347,6 +355,7 @@ Private Type DictionaryVariables
     UBound As Long
     UsedCount As Long
     AllowDuplicateKeys As Boolean
+    CreateEmptyIfMissingKey As Boolean
     AddHash As TempHash
     DefInstance As Dictionary 'Avoids deallocation of default (Predeclared) dict
     Dealloc As DeallocVars
@@ -414,21 +423,26 @@ Attribute Item.VB_UserMemId = 0
     End With
 #End If
     Dim i As Long
-#If StrictScriptingMode Then
+    '
     'https://github.com/cristianbuse/VBA-FastDictionary/discussions/28
-    GetIndex Key, i, Vars.AddHash.hVal _
-                   , Vars.AddHash.groupSlot _
-                   , Vars.AddHash.controlByte
-    If i = notFound Then
-        Vars.AddHash.isSet = True
-        Add Key, Empty
-        Exit Property
+#If StrictScriptingMode = 0 Then
+    If Vars.CreateEmptyIfMissingKey Then
+#End If
+        GetIndex Key, i, Vars.AddHash.hVal _
+                       , Vars.AddHash.groupSlot _
+                       , Vars.AddHash.controlByte
+        If i = notFound Then
+            Vars.AddHash.isSet = True
+            Add Key, Empty
+            Exit Property
+        End If
+#If StrictScriptingMode = 0 Then
+    Else
+        GetIndex Key, i
+        'We raise error manually to avoid issue #14
+        'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
+        If i = notFound Then Err.Raise 9
     End If
-#Else
-    GetIndex Key, i
-    'We raise error manually to avoid issue #14
-    'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
-    If i = notFound Then Err.Raise 9
 #End If
 #If x64 Then
     If Vars.Meta(i) And isItemObjBit Then
@@ -2388,8 +2402,36 @@ End Property
 #End If
 #End If
 
+'Calling Item (Get) with a missing Key will:
+' - throw if CreateEmptyItemIfMissingKey and StrictScriptingMode are both False
+' - will add the missing Key and an Empty Item if any of the two are True
 Public Property Get StrictScriptingMode() As Boolean
 #If StrictScriptingMode Then
     StrictScriptingMode = True
 #End If
 End Property
+Public Property Get CreateEmptyItemIfMissingKey() As Boolean
+    CreateEmptyItemIfMissingKey = Vars.CreateEmptyIfMissingKey
+End Property
+Public Property Let CreateEmptyItemIfMissingKey(ByVal newValue As Boolean)
+    Vars.CreateEmptyIfMissingKey = newValue
+End Property
+
+'Alternative method to Item (Get)
+'Does not throw
+'Does not add Key if missing
+Public Function TryGetItem(ByRef Key As Variant _
+                         , ByRef OutItem As Variant) As Boolean
+    Dim i As Long: GetIndex Key, i, IgnoreErrors:=True
+    If i <= notFound Then Exit Function
+#If x64 Then
+    If Vars.Meta(i) And isItemObjBit Then
+#Else
+    If Vars.Keys(i).IsItemObj Then
+#End If
+        Set OutItem = Vars.Items(i)
+    Else
+        OutItem = Vars.Items(i)
+    End If
+    TryGetItem = True
+End Function
