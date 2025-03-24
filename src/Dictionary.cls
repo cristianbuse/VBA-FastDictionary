@@ -130,9 +130,6 @@ Option Compare Binary
         Private Declare Sub VariantCopy Lib "oleaut32.dll" (ByRef pvargDest As Variant, ByVal pvargSrc As Long)
     #End If
 #End If
-#If TWINBASIC Then
-    Private Declare PtrSafe Sub RtlMoveMemory Lib "kernel32" (Destination As Any, Source As Any, ByVal Length As LongPtr)
-#End If
 #If VBA7 = 0 Then
     Private Enum LongPtr
         [_]
@@ -1782,7 +1779,6 @@ Initialized:
 #End If
 End Sub
 
-'Avoid Defender alerts by not using RtlMoveMemory
 #If Windows And FastDealloc Then
 Public Property Let MemLongPtr(ByVal memAddress As LongPtr _
                              , ByVal newValue As LongPtr)
@@ -1858,7 +1854,6 @@ Private Sub FixStackBugs(ByRef h As Globals)
     itemGetPtr = Mem.RPtr(0)
     '
     '_Terminate address
-    'We avoid Defender alert by not using LocalSize (kernel.dll)
     'Needs adjusting for if implementing interfaces or events
     iClassModuleEvtPtr = Vars.Dealloc.ThisPtr + 96 + LenB(Vars) + LenB(Mem)
     h.saP.pvData = iClassModuleEvtPtr
@@ -1962,7 +1957,9 @@ Private Function DictEnum() As IUnknown
     '
     If vtbl(0) = NullPtr Then
         GetMemPtr tempPtr, vtblptr
-        RtlMoveMemory vtbl(0), ByVal vtblptr, ptrSize * 7 'Copy original virtual table
+        For i = 0 To 6 'Copy original virtual table
+            GetMemPtr vtblptr + ptrSize * i, vtbl(i)
+        Next
         vtbl(7) = vtblptr 'Save original vtbl at additional position
         GetMemPtr Vars.Dealloc.ThisPtr, vtblptr
         GetMemPtr vtblptr + ptrSize * 11, vtbl(3) 'Replace 'Next'
@@ -1974,6 +1971,7 @@ Private Function DictEnum() As IUnknown
     '
     Dim hasGaps As Boolean: hasGaps = (Vars.UsedCount < Vars.Count)
     '
+    i = 0
     If hasGaps Then
         #If x64 Then
             Do While Vars.Meta(i) = hmRemoved: i = i + 1: Loop
