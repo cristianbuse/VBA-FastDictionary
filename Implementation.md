@@ -151,7 +151,7 @@ However, the new Dictionary (this repo) casts ```Single``` to ```Double```. This
 
 This Dictionary only raises errors 5, 9, 450 and 457 when ```StrictScriptingMode``` is off / ```False``` (default).
 
-When ```StrictScriptingMode``` is on / ```True```, this Dictionary matches ```Scripting.Dictionary``` and raises error ```32811``` when:
+When ```[StrictScriptingMode](#strictscriptingmode)``` is on / ```True```, this Dictionary matches ```Scripting.Dictionary``` and raises error ```32811``` when:
 - calling ```Remove``` with a key that does not exist
 - calling ```Key``` with an ```OldKey``` that does not exist
 
@@ -164,7 +164,7 @@ When calling the ```Item``` (Get) property with a key that does not exist, the `
 So, by default, this Dictionary throws error 9 if ```Item``` (Get) is called with a key that is not part of the dictionary.
 
 However, there are 2 ways to replicate the ```Scripting.Dictionary``` behaviour:
-1. Turn ```StrictScriptingMode``` to on / ```True``` using the precompile options mentioned above
+1. Turn ```[StrictScriptingMode](#strictscriptingmode)``` to on / ```True``` using the precompile options mentioned above
 2. Turn ```CreateEmptyItemIfMissingKey``` to ```True``` at runtime, anytime, regardless if the Dictionary instance already has items or not
 
 Moreover, the new ```TryGetItem``` method complements ```Item``` (Get) if the user wants an error-free approach.
@@ -221,16 +221,98 @@ Debug.Print dict(0) '3
 
 ### Return type for ```Items``` and ```Keys``` incompatibility
 
-For both the ```Items``` and ```Keys``` method, ```Scripting.Dictionary``` returns ```Variant```.
+For both the ```Items``` and ```Keys``` method, ```Scripting.Dictionary``` returns ```Variant```. To replicate the ```Scripting.Dictionary``` behaviour, just turn ```[StrictScriptingMode](#strictscriptingmode)``` to on / ```True```. 
 
 By default, this Dictionary returns ```Variant()``` for both, for the following reasons:
 - It's slower to access members of an array wrapped in a ```Variant``` because VB* creates a temporary ```Variant``` each time you access a member - this is to account for the fact that the array can have various data types (e.g. ```Long()``` or ```String()```) and it is unknown until runtime. However, when using the exact type e.g. ```Variant()``` or ```Long()``` without wrapping in a ```Variant```, the access is done directly to the relevant memory where the data is stored
 - The user can still wrap the result in a ```Variant``` if they want to
 - Passing a ```Variant``` to a method expecting ```Variant()``` is not allowed, while passing ```Variant()``` to ```Variant``` is allowed
 - Both dictionaries always return an array of Variant(s) regardless of the items or keys. So, for clarity, best to be explicit with ```Variant()```
-- Assigining a ```Variant/Variant()``` to a ```Variant()``` makes a copy of the array while the reverse does not
+- Assigining the result of a function returning ```Variant/Variant()``` to a variable of type ```Variant()``` makes a copy of the array while the reverse does not
 
-To replicate the ```Scripting.Dictionary``` behaviour, just turn ```StrictScriptingMode``` to on / ```True```.
+To test the last point above, run ```TestAssumptions``` below from a standard .bas module:
+```VBA
+Option Explicit
+
+#If Win64 Then
+    Const PTR_SIZE = 8
+    Const pvDataOffset = 16
+#Else
+    Const PTR_SIZE = 4
+    Const pvDataOffset = 12
+#End If
+Const VT_BYREF As Long = &H4000
+Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
+
+Private m_arrPtr As LongPtr
+Private m_pvDataPtr As LongPtr
+
+Sub TestAssumptions()
+    Dim v As Variant
+    Dim vArr() As Variant
+    Dim aPtr As LongPtr
+    Dim pvDataPtr As LongPtr
+    '
+    'Scenario 1 - Func Variant() to Var Variant(): no copy made
+    vArr = VariantArray
+    aPtr = ArrPtr(vArr)
+    pvDataPtr = MemLongPtr(aPtr + pvDataOffset)
+    Debug.Assert aPtr = m_arrPtr
+    Debug.Assert pvDataPtr = m_pvDataPtr
+    '
+    'Scenario 2 - Func Variant to Var Variant(): copy made!
+    vArr = VariantArrayWrapped
+    aPtr = ArrPtr(vArr)
+    pvDataPtr = MemLongPtr(aPtr + pvDataOffset)
+    Debug.Assert aPtr <> m_arrPtr
+    Debug.Assert pvDataPtr <> m_pvDataPtr
+    '
+    'Scenario 3 - Func Variant() to Variant: no copy made
+    v = VariantArray
+    aPtr = ArrPtr(v)
+    pvDataPtr = MemLongPtr(aPtr + pvDataOffset)
+    Debug.Assert aPtr = m_arrPtr
+    Debug.Assert pvDataPtr = m_pvDataPtr
+    '
+    'Scenario 4 - Func Variant to Var Variant: no copy made
+    v = VariantArrayWrapped
+    aPtr = ArrPtr(v)
+    pvDataPtr = MemLongPtr(aPtr + pvDataOffset)
+    Debug.Assert aPtr = m_arrPtr
+    Debug.Assert pvDataPtr = m_pvDataPtr
+End Sub
+
+Function VariantArray() As Variant()
+    VariantArray = Array(1, 2, 3)
+    m_arrPtr = ArrPtr(VariantArray)
+    m_pvDataPtr = MemLongPtr(m_arrPtr + pvDataOffset)
+End Function
+
+Function VariantArrayWrapped() As Variant
+    VariantArrayWrapped = Array(1, 2, 3)
+    m_arrPtr = ArrPtr(VariantArrayWrapped)
+    m_pvDataPtr = MemLongPtr(m_arrPtr + pvDataOffset)
+End Function
+
+Public Function ArrPtr(ByRef arr As Variant) As LongPtr
+    Dim ptr As LongPtr:  ptr = VarPtr(arr)
+    Dim vt As VbVarType: vt = MemInt(ptr) 'VarType(arr) ignores VT_BYREF
+    If vt And vbArray Then
+        Const pArrayOffset As Long = 8
+        ArrPtr = MemLongPtr(ptr + pArrayOffset)
+        If vt And VT_BYREF Then ArrPtr = MemLongPtr(ArrPtr)
+    Else
+        Err.Raise 5, "ArrPtr", "Array required"
+    End If
+End Function
+
+Private Function MemLongPtr(ByVal addr As LongLong) As LongPtr
+    CopyMemory MemLongPtr, ByVal addr, PTR_SIZE
+End Function
+Private Function MemInt(ByVal addr As LongLong) As Integer
+    CopyMemory MemInt, ByVal addr, 2
+End Function
+```
 
 ## Hashing
 
