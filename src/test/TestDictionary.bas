@@ -19,6 +19,7 @@ Private Const unsupportedKeyErr As Long = invalidCallErr
 Private Const keyOrIndexNotFoundErr As Long = 9
 Private Const setMissingErr As Long = 450
 Private Const duplicatedKeyErr As Long = 457
+Private Const failedScriptingErr As Long = 32811
 
 Public Sub RunAllDictionaryTests()
     TestEmptyDictionary
@@ -44,6 +45,7 @@ Public Sub RunAllDictionaryTests()
     TestDictionaryRemoveAll
     TestDictionarySelf
     TestDictionaryStackFixes
+    TestDictionaryTryGetItem
     Debug.Print "Finished running tests at " & Now()
 End Sub
 
@@ -86,12 +88,16 @@ Private Sub TestDictionaryAdd()
     Next v
     On Error GoTo 0
     '
-    d.Add 11, Array()
-    d.Add 12, New Dictionary
-    d.Add "Test Add", Nothing
-    d.Add "test add", New Collection
-    d.Add "test add" & vbNewLine, 1
-    d.Add "test add" & vbNullChar, 1
+    For Each v In Array(CLng(3), Array(), 0, -1, Array(1, 2, 3), Empty)
+        Debug.Assert Not d.Add(v, v, IgnoreErrors:=True)
+    Next v
+    '
+    Debug.Assert d.Add(11, Array())
+    Debug.Assert d.Add(12, New Dictionary)
+    Debug.Assert d.Add("Test Add", Nothing)
+    Debug.Assert d.Add("test add", New Collection)
+    Debug.Assert d.Add("test add" & vbNewLine, 1)
+    Debug.Assert d.Add("test add" & vbNullChar, 1)
 End Sub
 Private Function GetDefaultInterface(ByVal obj As stdole.IUnknown) As Object
     Set GetDefaultInterface = obj
@@ -257,6 +263,8 @@ Private Sub TestDictionaryExists()
     d.Exists Array()
     Debug.Assert Err.Number = unsupportedKeyErr
     On Error GoTo 0
+    '
+    Debug.Assert Not d.Exists(Array(), True)
 End Sub
 
 '@Description("IEEE754 +inf")
@@ -362,6 +370,14 @@ Private Sub TestDictionaryHashVal()
     d.CompareMode = vbTextCompare
     Debug.Assert d.HashVal("AA") = d.HashVal("aa")
     Debug.Assert d.HashVal("AAAAAA") = d.HashVal("AAaAAA")
+    '
+    '
+    On Error Resume Next
+    i = d.HashVal(Array())
+    Debug.Assert Err.Number = unsupportedKeyErr
+    On Error GoTo 0
+    '
+    Debug.Assert d.HashVal(Array(), True) = 0
 End Sub
 
 Private Sub TestDictionaryIndex()
@@ -379,11 +395,22 @@ Private Sub TestDictionaryIndex()
     Next i
     '
     Debug.Assert d.Index(25000) = 7000
+    Debug.Assert d.Index(30000) = 12000
+    '
+    For i = 30000 To 45000
+        d.Remove i
+    Next i
+    '
+    Debug.Assert d.Index(25000) = 7000
+    Debug.Assert d.Index(28000) = 10000
+    Debug.Assert d.Index(45001) = 12000
     '
     On Error Resume Next
     d.Index 15000
     Debug.Assert Err.Number = keyOrIndexNotFoundErr
     On Error GoTo 0
+    '
+    Debug.Assert d.Index(15000, True) = -1
 End Sub
 
 Private Sub TestDictionaryItem()
@@ -433,15 +460,39 @@ Private Sub TestDictionaryItem()
     d.Item("new") = True 'Adds a new item
     Debug.Assert d("new") = True
     '
-    On Error Resume Next
-    v = d.Item("test")
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
-    For i = 100 To 105
-        Err.Clear
-        v = d.Item(i)
+    If d.StrictScriptingMode Then
+        Debug.Assert IsEmpty(d.Item("test"))
+        For i = 100 To 105
+            Debug.Assert IsEmpty(d.Item(i))
+        Next i
+    Else
+        On Error Resume Next
+        v = d.Item("test")
         Debug.Assert Err.Number = keyOrIndexNotFoundErr
-    Next i
-    Err.Clear
+        For i = 100 To 105
+            Err.Clear
+            v = d.Item(i)
+            Debug.Assert Err.Number = keyOrIndexNotFoundErr
+        Next i
+        On Error GoTo 0
+        '
+        d.CreateEmptyItemIfMissingKey = True
+        Debug.Assert IsEmpty(d.Item("test"))
+        For i = 100 To 105
+            Debug.Assert IsEmpty(d.Item(i))
+        Next i
+        '
+        d.CreateEmptyItemIfMissingKey = False
+        On Error Resume Next
+        For i = 106 To 200
+            Err.Clear
+            v = d.Item(i)
+            Debug.Assert Err.Number = keyOrIndexNotFoundErr
+        Next i
+        On Error GoTo 0
+    End If
+    '
+    On Error Resume Next
     v = d.Item(Array())
     Debug.Assert Err.Number = unsupportedKeyErr
     On Error GoTo 0
@@ -582,10 +633,18 @@ Private Sub TestDictionaryKey()
     Debug.Assert Err.Number = duplicatedKeyErr
     Err.Clear
     d.Key("oldKeyX") = "newKey"
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     Err.Clear
     d.Key("oldkey") = "newKey"
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     Err.Clear
     d.Key(Array()) = "newKey"
     Debug.Assert Err.Number = unsupportedKeyErr
@@ -618,7 +677,11 @@ Private Sub TestDictionaryKey()
     Debug.Assert Err.Number = duplicatedKeyErr
     Err.Clear
     d.Key("oldKeyX") = "newkey"
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     Err.Clear
     d.Key("oldkey") = "newKey"
     Debug.Assert Err.Number = 0
@@ -965,7 +1028,11 @@ Private Sub TestDictionaryRemove()
     '
     On Error Resume Next
     d.Remove Empty
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     On Error GoTo 0
     '
     For i = 1 To 10
@@ -996,22 +1063,37 @@ Private Sub TestDictionaryRemove()
     '
     On Error Resume Next
     d.Remove 1
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     Err.Clear
     d.Remove CStr(1)
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     On Error GoTo 0
+    '
+    Debug.Assert Not d.Remove(1, IgnoreErrors:=True)
+    Debug.Assert Not d.Remove(CStr(1), IgnoreErrors:=True)
     '
     d.Add Null, Empty
     d.Add Empty, Null
     '
     Debug.Assert d.Exists(Null)
-    d.Remove Null
+    Debug.Assert d.Remove(Null, True)
     Debug.Assert Not d.Exists(Null)
     '
     On Error Resume Next
-    d.Remove Null
-    Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    d.Remove Null, False
+    If d.StrictScriptingMode Then
+        Debug.Assert Err.Number = failedScriptingErr
+    Else
+        Debug.Assert Err.Number = keyOrIndexNotFoundErr
+    End If
     Err.Clear
     d.Remove Array()
     Debug.Assert Err.Number = unsupportedKeyErr
@@ -1245,3 +1327,14 @@ Private Sub TestForEach3()
     Set c = Nothing
 End Sub
 #End If
+
+Private Sub TestDictionaryTryGetItem()
+    Dim d As New Dictionary
+    Dim v As Variant
+    '
+    Debug.Assert Not d.TryGetItem("missing", v)
+    '
+    d.Add "key", 1
+    Debug.Assert d.TryGetItem("key", v)
+    Debug.Assert v = 1
+End Sub

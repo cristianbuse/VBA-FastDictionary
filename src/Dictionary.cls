@@ -67,6 +67,9 @@ Attribute VB_Exposed = False
 ''         - Removes all Key-Item pairs
 ''    * Self
 ''         - Self instance - useful in 'With New Dictionary' code blocks
+''    * TryGetItem
+''         - Returns a Boolean indicating if the given input Key exists while
+''           also returning the corresponding Item by reference
 '' Properties:
 ''    * CompareMode <Get/Let>
 ''         - Can only be changed if there are no stored items
@@ -90,28 +93,42 @@ Attribute VB_Exposed = False
 ''         - Returns the current % load for the hash map containing indexes
 ''    * AllowDuplicateKeys <Get/Let>
 ''         - Can only be changed if there are no stored items
+''    * StrictScriptingMode <Get>
+''         - Returns a boolean indicating if this class is fully compatible with
+''           Scripting.Dictionary. Can only be set via precompiler constants
+''         - Affects Item (Get) and return type for Items / Keys
+''    * CreateEmptyItemIfMissingKey <Get/Let>
+''         - False (Default). If StrictScriptingMode is also False then
+''           Item (Get) will throw an error if Key is missing
+''         - True. Item (Get) will add a missing Key and an Empty Item
 ''==============================================================================
 
 '@PredeclaredId
 Option Explicit
 Option Compare Binary
 
+'https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#compatibility-with-scriptingdictionary
+
+'If set to 'True' would match Scripting.Dictionary functionality
+#Const LOCAL_STRICT_SCRIPTING_MODE = False
+
+'GLOBAL_... can be set in the Project Properties under
+' Conditional Compilation Arguments
+#Const StrictScriptingMode = LOCAL_STRICT_SCRIPTING_MODE Or _
+                             FASTDICT_STRICT_SCRIPTING_MODE
+
 #If Mac Then
     #If VBA7 Then
-        Private Declare PtrSafe Function CopyMemory Lib "/usr/lib/libc.dylib" Alias "memmove" (Destination As Any, Source As Any, ByVal Length As LongPtr) As LongPtr
+        Private Declare PtrSafe Function memmove Lib "/usr/lib/libc.dylib" (Destination As Any, Source As Any, ByVal Length As LongPtr) As LongPtr
     #Else
-        Private Declare Function CopyMemory Lib "/usr/lib/libc.dylib" Alias "memmove" (Destination As Any, Source As Any, ByVal Length As Long) As Long
+        Private Declare Function memmove Lib "/usr/lib/libc.dylib" (Destination As Any, Source As Any, ByVal Length As Long) As Long
     #End If
 #Else 'Windows
     #If VBA7 Then
-        Private Declare PtrSafe Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As LongPtr)
-        Private Declare PtrSafe Function LocalSize Lib "kernel32" (ByVal hMem As LongPtr) As Long
+        Private Declare PtrSafe Sub VariantCopy Lib "oleaut32.dll" (ByRef pvargDest As Variant, ByVal pvargSrc As LongPtr)
     #Else
-        Private Declare Sub CopyMemory Lib "kernel32" Alias "RtlMoveMemory" (Destination As Any, Source As Any, ByVal Length As Long)
+        Private Declare Sub VariantCopy Lib "oleaut32.dll" (ByRef pvargDest As Variant, ByVal pvargSrc As Long)
     #End If
-#End If
-#If TWINBASIC Then
-    Private Declare PtrSafe Sub VariantCopy Lib "oleaut32.dll" (ByRef pvargDest As Variant, ByVal pvargSrc As LongPtr)
 #End If
 #If VBA7 = 0 Then
     Private Enum LongPtr
@@ -141,6 +158,7 @@ Private Enum InternalConstants 'Hides constants from Locals window
 #End If
     prevOffset = ptrSize 'Previous instance pointer immediately after vTable
     notFound = -1
+    noHashSupport = -2
     intSize = 2
     intsPerDouble = 4
     groupSize = ptrSize
@@ -311,6 +329,13 @@ Private Type DeallocVars
     NextDictPtr As LongPtr
 End Type
 
+Private Type TempHash
+    hVal As Long
+    groupSlot As Long
+    controlByte As Long
+    isSet As Boolean
+End Type
+
 Private Type DictionaryVariables
     Hash As HashMap
     Enums As EnumProvider
@@ -327,6 +352,8 @@ Private Type DictionaryVariables
     UBound As Long
     UsedCount As Long
     AllowDuplicateKeys As Boolean
+    CreateEmptyIfMissingKey As Boolean
+    AddHash As TempHash
     DefInstance As Dictionary 'Avoids deallocation of default (Predeclared) dict
     Dealloc As DeallocVars
     IsInitialized As Boolean
@@ -392,11 +419,28 @@ Attribute Item.VB_UserMemId = 0
         .stItemGet.currentCallType = earlyBound
     End With
 #End If
-    Dim i As Long: i = GetIndex(Key)
+    Dim i As Long
     '
-    'We raise error manually to avoid issue #14
-    'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
-    If i = notFound Then Err.Raise 9
+    'https://github.com/cristianbuse/VBA-FastDictionary/discussions/28
+#If StrictScriptingMode = 0 Then
+    If Vars.CreateEmptyIfMissingKey Then
+#End If
+        GetIndex Key, i, Vars.AddHash.hVal _
+                       , Vars.AddHash.groupSlot _
+                       , Vars.AddHash.controlByte
+        If i = notFound Then
+            Vars.AddHash.isSet = True
+            Add Key, Empty
+            Exit Property
+        End If
+#If StrictScriptingMode = 0 Then
+    Else
+        GetIndex Key, i
+        'We raise error manually to avoid issue #14
+        'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
+        If i = notFound Then Err.Raise 9
+    End If
+#End If
 #If x64 Then
     If Vars.Meta(i) And isItemObjBit Then
 #Else
@@ -411,30 +455,36 @@ Public Property Let Item(ByRef Key As Variant, ByRef Item As Variant)
     If IsObject(Item) Or (VarType(Item) = vbDataObject) Then
         Err.Raise 450, TypeName(Me) & ".Item", "'Set' is required"
     End If
-    Dim i As Long: i = GetIndex(Key)
-    If i > notFound Then
-        #If x64 Then
-            Vars.Meta(i) = Vars.Meta(i) And keyBitMask
-        #Else
-            Vars.Keys(i).IsItemObj = False
-        #End If
-        Vars.Items(i) = Item
-    Else
+    Dim i As Long: GetIndex Key, i, Vars.AddHash.hVal _
+                                  , Vars.AddHash.groupSlot _
+                                  , Vars.AddHash.controlByte
+    If i = notFound Then
+        Vars.AddHash.isSet = True
         Add Key, Item
+        Exit Property
     End If
+    #If x64 Then
+        Vars.Meta(i) = Vars.Meta(i) And keyBitMask
+    #Else
+        Vars.Keys(i).IsItemObj = False
+    #End If
+    Vars.Items(i) = Item
 End Property
 Public Property Set Item(ByRef Key As Variant, ByRef Item As Object)
-    Dim i As Long: i = GetIndex(Key)
-    If i > notFound Then
-        #If x64 Then
-            Vars.Meta(i) = Vars.Meta(i) Or isItemObjBit
-        #Else
-            Vars.Keys(i).IsItemObj = True
-        #End If
-        Set Vars.Items(i) = Item
-    Else
+    Dim i As Long: GetIndex Key, i, Vars.AddHash.hVal _
+                                  , Vars.AddHash.groupSlot _
+                                  , Vars.AddHash.controlByte
+    If i = notFound Then
+        Vars.AddHash.isSet = True
         Add Key, Item
+        Exit Property
     End If
+    #If x64 Then
+        Vars.Meta(i) = Vars.Meta(i) Or isItemObjBit
+    #Else
+        Vars.Keys(i).IsItemObj = True
+    #End If
+    Set Vars.Items(i) = Item
 End Property
 
 #If TWINBASIC Then
@@ -446,13 +496,14 @@ Public Sub IEnumVARIANT_Next(ByVal celt As Long _
     Dim currItemPtr As LongPtr
     Dim nextItemPtr As LongPtr
     Dim vtbl As LongPtr
+    Dim temp As LongPtr
     #If x64 Then
         Const nextItemOffset As LongLong = 40
     #Else
         Const nextItemOffset As Long = 24
     #End If
     '
-    CopyMemory currItemPtr, ByVal currItemAddr, ptrSize
+    GetMemPtr currItemAddr, currItemPtr
     If currItemPtr = NullPtr Then
         rgVar = Empty
         Exit Sub
@@ -460,14 +511,16 @@ Public Sub IEnumVARIANT_Next(ByVal celt As Long _
     '
     VariantCopy rgVar, currItemPtr
     If VarPtr(pceltFetched) = NullPtr Then
-        CopyMemory nextItemPtr, ByVal currItemPtr + nextItemOffset, ptrSize
+        GetMemPtr currItemPtr + nextItemOffset, nextItemPtr
         If nextItemPtr = NullPtr Then 'Restore original vtbl
-            CopyMemory vtbl, ByVal ptr, ptrSize
-            CopyMemory ByVal ptr, ByVal vtbl + ptrSize * 7, ptrSize
+            GetMemPtr ptr, vtbl
+            GetMemPtr vtbl + ptrSize * 7, temp
+            PutMemPtr ptr, temp
         End If
-        CopyMemory ByVal currItemAddr, nextItemPtr, ptrSize
+        PutMemPtr currItemAddr, nextItemPtr
     Else
-        CopyMemory ByVal currItemAddr, ByVal currItemPtr + nextItemOffset, ptrSize
+        GetMemPtr currItemPtr + nextItemOffset, temp
+        PutMemPtr currItemAddr, temp
         pceltFetched = 1
     End If
 End Sub
@@ -492,19 +545,35 @@ Private Sub Init(Optional ByVal newGroupCount As Long = initialGroupCount)
     Vars.Enums.hasEnum = False
 End Sub
 
-'Raises Error 457 if a duplicated key was specified
-Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
+'Adds a key-item pair
+'Returns
+' - True, if pair is added
+' - False, if duplicated / invalid key AND IgnoreErrors = True
+'If IgnoreErrors = False, raises error:
+' -   5 if an Array or UDT is passed as Key
+' - 457 if a duplicated key was specified AND AllowDuplicateKeys = False
+Public Function Add(ByRef Key As Variant _
+                  , ByRef Item As Variant _
+                  , Optional ByVal IgnoreErrors As Boolean = False) As Boolean
     Dim hVal As Long
     Dim groupSlot As Long
     Dim i As Long
     Dim controlByte As Long
     '
-    If Vars.AllowDuplicateKeys Then
-        GetIndex Key, hVal, groupSlot, controlByte, True
+    If Vars.AddHash.isSet Then
+        hVal = Vars.AddHash.hVal
+        groupSlot = Vars.AddHash.groupSlot
+        controlByte = Vars.AddHash.controlByte
+        Vars.AddHash.isSet = False
     Else
-        i = GetIndex(Key, hVal, groupSlot, controlByte)
-        If i > notFound Then Err.Raise 457, TypeName(Me) & ".Add"
+        GetIndex Key, i, hVal, groupSlot, controlByte, , Vars.AllowDuplicateKeys _
+                                                       , IgnoreErrors
+        If i <> notFound Then
+            If IgnoreErrors Then Exit Function
+            Err.Raise 457, TypeName(Me) & ".Add"
+        End If
     End If
+    Add = True
     '
     If Vars.Count > Vars.UBound Then
         Vars.UBound = Vars.UBound * 2 + 1
@@ -586,7 +655,7 @@ Public Sub Add(ByRef Key As Variant, ByRef Item As Variant)
         .Meta = hVal
     End With
 #End If
-End Sub
+End Function
 
 'Rebuilds hash table using the stored hashes with metadata
 Private Sub Rehash(ByVal newGroupCount As Long)
@@ -626,7 +695,7 @@ Private Sub InitHashMap(ByVal newGroupCount As Long)
     Vars.Hash.ControlMask = Vars.Hash.GroupCount * &H7F&
 End Sub
 
-'Returns non-zero data index if key is found
+'Returns (By Ref) non-zero data index if key is found
 'Returns (ByRef) a Long Integer / DWORD - 32 bits little-endian (LE) hash value
 'Sign bit not used so that the following operations are straightforward:
 '   - right bit shifting using \ operator and powers of 2
@@ -643,12 +712,14 @@ End Sub
 '|1|               | 0| 0|       - Input is Null (bit 0 is 1 - vbNull)
 '|2|               | 0| 0|       - Key was removed (HashMeta.hmRemoved)
 '|?|?|?|?|...| ?| ?| 0| 0|       - Input is +Inf or -Inf or QNaN or SNaN
-Private Function GetIndex(ByRef Key As Variant _
-                        , Optional ByRef hVal As Long _
-                        , Optional ByRef groupSlot As Long _
-                        , Optional ByRef controlByte As Long _
-                        , Optional ByRef posInGroup As Long _
-                        , Optional ByVal hashOnly As Boolean = False) As Long
+Private Sub GetIndex(ByRef Key As Variant _
+                   , Optional ByRef outIndex As Long _
+                   , Optional ByRef hVal As Long _
+                   , Optional ByRef groupSlot As Long _
+                   , Optional ByRef controlByte As Long _
+                   , Optional ByRef posInGroup As Long _
+                   , Optional ByVal hashOnly As Boolean = False _
+                   , Optional ByVal IgnoreErrors As Boolean = False)
     #If (x32) Or Mac Then
         Const vbLongLong = 20
     #End If
@@ -672,6 +743,7 @@ Private Function GetIndex(ByRef Key As Variant _
                         hVal = Mem.TextHash(0)(Key) Or hmText 'Early-binded
                     Else 'Faster to loop integers
                         .saI.pvData = StrPtr(Key)
+                        hVal = 0
                         For i = 0 To .saI.rgsabound0.cElements - 1
                             hVal = (hVal And tOverflowMask) * tPrime + Mem.RInt(i)
                         Next i
@@ -693,6 +765,7 @@ Private Function GetIndex(ByRef Key As Variant _
                     Dim s As String: s = LCase$(Key)
                     .saI.pvData = StrPtr(s)
                 End If
+                hVal = 0
                 For i = 0 To .saI.rgsabound0.cElements - 1
                     hVal = (hVal And tOverflowMask) * tPrime + Mem.RInt(i)
                 Next i
@@ -722,6 +795,10 @@ Private Function GetIndex(ByRef Key As Variant _
         #End If
         Set iUnk = Nothing 'Because of Static but still faster than just Dim
     ElseIf vt > vbLongLong Then
+        If IgnoreErrors Then
+            outIndex = noHashSupport
+            Exit Sub
+        End If
         Err.Raise 5, , "Cannot hash an Array or User Defined Type"
     ElseIf vt > vbNull Then
         Dim m As HashMeta
@@ -763,7 +840,10 @@ Private Function GetIndex(ByRef Key As Variant _
     'Calculate sub-hashes
     groupSlot = hVal Mod Vars.Hash.GroupCount
     controlByte = (hVal And Vars.Hash.ControlMask) \ Vars.Hash.GroupCount
-    If hashOnly Then Exit Function
+    If hashOnly Then
+        outIndex = notFound
+        Exit Sub
+    End If
     '
     #If x64 Then
         Const signBit As LongLong = &H8000000000000000^
@@ -798,31 +878,31 @@ Private Function GetIndex(ByRef Key As Variant _
                                  (-matches And matches) Mod positionPrime))
                     matches = matches Xor Mem.Look(0).PositionMask(posInGroup)
                 End If
-                GetIndex = .Index(posInGroup)
+                outIndex = .Index(posInGroup)
 #If x64 Then
-                If (Vars.Meta(GetIndex) And keyBitMask) = hVal Then
+                If (Vars.Meta(outIndex) And keyBitMask) = hVal Then
                     If vt = vbString And (Vars.Compare > vbBinaryCompare) Then
-                        If StrComp(Vars.Keys(GetIndex) _
-                                 , Key, Vars.Compare) = 0 Then Exit Function
+                        If StrComp(Vars.Keys(outIndex) _
+                                 , Key, Vars.Compare) = 0 Then Exit Sub
                     ElseIf vt = vbObject Then 'vbDataObject was replaced
-                        If Vars.Keys(GetIndex) Is Key Then Exit Function
+                        If Vars.Keys(outIndex) Is Key Then Exit Sub
                     ElseIf hVal < HashMeta.[_modHM] Then 'Already matched
-                        Exit Function
+                        Exit Sub
                     Else 'Number, Error or case-sensitive Text
-                        If Vars.Keys(GetIndex) = Key Then Exit Function
+                        If Vars.Keys(outIndex) = Key Then Exit Sub
                     End If
                 End If
 #Else
-                If Vars.Keys(GetIndex).Meta = hVal Then
+                If Vars.Keys(outIndex).Meta = hVal Then
                     If vt = vbString And (Vars.Compare > vbBinaryCompare) Then
-                        If StrComp(Vars.Keys(GetIndex).Value _
-                                 , Key, Vars.Compare) = 0 Then Exit Function
+                        If StrComp(Vars.Keys(outIndex).Value _
+                                 , Key, Vars.Compare) = 0 Then Exit Sub
                     ElseIf vt = vbObject Then 'vbDataObject was replaced
-                        If Vars.Keys(GetIndex).Value Is Key Then Exit Function
+                        If Vars.Keys(outIndex).Value Is Key Then Exit Sub
                     ElseIf hVal < HashMeta.[_modHM] Then 'Already matched
-                        Exit Function
+                        Exit Sub
                     Else 'Number, Error or case-sensitive Text
-                        If Vars.Keys(GetIndex).Value = Key Then Exit Function
+                        If Vars.Keys(outIndex).Value = Key Then Exit Sub
                     End If
                 End If
 #End If
@@ -831,8 +911,8 @@ Private Function GetIndex(ByRef Key As Variant _
         End With
         groupSlot = (groupSlot + 1) Mod Vars.Hash.GroupCount
     Loop Until groupSlot = startSlot
-    GetIndex = notFound
-End Function
+    outIndex = notFound
+End Sub
 
 'Values greater than 2 can be used to compare using specific Locale IDs (LCID)
 'https://learn.microsoft.com/en-us/office/vba/Language/Reference/User-Interface-Help/comparemode-property
@@ -874,13 +954,24 @@ Public Property Get Count() As Long
     Count = Vars.UsedCount
 End Property
 
-Public Function Exists(ByRef Key As Variant) As Boolean
-    Exists = (GetIndex(Key) > notFound)
+Public Function Exists(ByRef Key As Variant _
+                     , Optional ByVal IgnoreErrors As Boolean = False) As Boolean
+    Dim i As Long: GetIndex Key, i, IgnoreErrors:=IgnoreErrors
+    Exists = (i > notFound)
 End Function
 
-Public Function Index(ByRef Key As Variant) As Long
-    Dim i As Long: i = GetIndex(Key)
-    If i = notFound Then Err.Raise 9
+'Returns -1 if invalid key and IgnoreErrors = True
+'Raises error 9 if invalid key and IgnoreErrors = False
+Public Function Index(ByRef Key As Variant _
+                    , Optional ByVal IgnoreErrors As Boolean = False) As Long
+    Dim i As Long: GetIndex Key, i, IgnoreErrors:=IgnoreErrors
+    If i <= notFound Then
+        If IgnoreErrors Then
+            Index = -1
+            Exit Function
+        End If
+        Err.Raise 9
+    End If
     '
     If Vars.UsedCount < Vars.Count Then
         Index = i - CountRemoved(i)
@@ -892,13 +983,14 @@ Private Function CountRemoved(ByVal upTo As Long) As Long
     Dim i As Long
     Dim startIndex As Long
     Dim endIndex As Long
-    Dim isFirstHalf As Boolean: isFirstHalf = (upTo < Vars.Count \ 2)
+    Dim isSecondHalf As Boolean: isSecondHalf = (upTo > Vars.Count \ 2)
+    Dim totalRemoved As Long:    totalRemoved = Vars.Count - Vars.UsedCount
     '
-    If isFirstHalf Then
-        endIndex = upTo - 1
-    Else
+    If isSecondHalf Then
         startIndex = upTo + 1
         endIndex = Vars.Count
+    Else
+        endIndex = upTo - 1
     End If
     For i = startIndex To endIndex
         #If x64 Then
@@ -906,10 +998,9 @@ Private Function CountRemoved(ByVal upTo As Long) As Long
         #Else
             If Vars.Keys(i).Meta = hmRemoved Then CountRemoved = CountRemoved + 1
         #End If
+        If CountRemoved = totalRemoved Then Exit For
     Next i
-    If Not isFirstHalf Then
-        CountRemoved = Vars.Count - Vars.UsedCount - CountRemoved
-    End If
+    If isSecondHalf Then CountRemoved = totalRemoved - CountRemoved
 End Function
 
 'Raises Error:
@@ -967,14 +1058,22 @@ Private Function FindIndex(ByVal i As Long) As Long
     FindIndex = j
 End Function
 
+#If StrictScriptingMode Then
+Public Property Get Items() As Variant
+#Else
 Public Property Get Items() As Variant()
+#End If
     If Vars.UsedCount = 0 Then
         Items = Array()
         Exit Property
     End If
     If Vars.UsedCount = Vars.Count Then
         Items = Vars.Items
-        ReDim Preserve Items(0 To Vars.Count - 1)
+        #If StrictScriptingMode Then
+            RedimItemsOrKeys Items
+        #Else
+            ReDim Preserve Items(0 To Vars.Count - 1)
+        #End If
     Else
         Dim res() As Variant
         ReDim res(0 To Vars.UsedCount - 1)
@@ -999,11 +1098,18 @@ Public Property Get Items() As Variant()
         Items = res
     End If
 End Property
+'Avoid copying the array again
+Private Sub RedimItemsOrKeys(ByRef arr As Variant)
+    ReDim Preserve arr(0 To Vars.Count - 1)
+End Sub
 
 'Change an existing key value
 'Raises Error:
-'   -   9: invalid OldKey (key is not associated with any element)
-'   - 457: invalid NewKey (key is already associated with an element)
+' * invalid OldKey (key is not associated with any element). Error code:
+'   -     9: if StrictScriptingMode = False
+'   - 32811: if StrictScriptingMode = True
+' * invalid NewKey (key is already associated with an element). Error code:
+'   -   457
 Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     Dim hVal As Long
     Dim groupSlot As Long
@@ -1011,12 +1117,19 @@ Public Property Let Key(ByRef OldKey As Variant, ByRef NewKey As Variant)
     Dim controlByte As Long
     Dim i As Long
     '
-    If GetIndex(NewKey, hVal, , controlByte) > notFound Then Err.Raise 457
-    i = GetIndex(OldKey, , groupSlot, , posInGroup)
+    GetIndex NewKey, i, hVal, , controlByte
+    If i > notFound Then Err.Raise 457
+    GetIndex OldKey, i, , groupSlot, , posInGroup
     '
     'We raise error manually to avoid issue #14
     'https://github.com/cristianbuse/VBA-FastDictionary/issues/14
-    If i = notFound Then Err.Raise 9
+    If i = notFound Then
+        #If StrictScriptingMode Then
+            Err.Raise 32811, , "Method 'Key' of object 'IDictionary' failed"
+        #Else
+            Err.Raise 9, TypeName(Me) & ".Key"
+        #End If
+    End If
     '
     'Replace Key and Meta while preserving Item
 #If x64 Then
@@ -1096,7 +1209,11 @@ Public Property Get KeyAtIndex(ByVal i As Long) As Variant
 #End If
 End Property
 
+#If StrictScriptingMode Then
+Public Property Get Keys() As Variant
+#Else
 Public Property Get Keys() As Variant()
+#End If
     If Vars.UsedCount = 0 Then
         Keys = Array()
         Exit Property
@@ -1109,7 +1226,11 @@ Public Property Get Keys() As Variant()
 #If x64 Then
     If Vars.UsedCount = Vars.Count Then
         Keys = Vars.Keys
-        ReDim Preserve Keys(0 To Vars.Count - 1)
+        #If StrictScriptingMode Then
+            RedimItemsOrKeys Keys
+        #Else
+            ReDim Preserve Keys(0 To Vars.Count - 1)
+        #End If
     Else
         ReDim res(0 To Vars.UsedCount - 1)
         For i = 0 To Vars.Count - 1
@@ -1202,9 +1323,15 @@ Public Sub PredictCount(ByVal expectedCount As Long)
 End Sub
 
 'Remove a single item
-'Raises Error:
-'   -   9: invalid key (key is not associated with any element)
-Public Sub Remove(ByRef Key As Variant)
+'Returns
+' * True, if item is removed
+' * False, if Key not found and IgnoreErrors = True
+'If IgnoreErrors = False and Key not found, raises error:
+' * invalid key (key is not associated with any element). Error code:
+'   -     9: if StrictScriptingMode = False
+'   - 32811: if StrictScriptingMode = True
+Public Function Remove(ByRef Key As Variant _
+                     , Optional ByVal IgnoreErrors As Boolean = False) As Boolean
     Dim groupSlot As Long
     Dim posInGroup As Long
     Dim lastPos As Long
@@ -1212,11 +1339,19 @@ Public Sub Remove(ByRef Key As Variant)
     Dim j As Long
     Dim ptr As LongPtr
     '
-    i = GetIndex(Key, , groupSlot, , posInGroup)
-    If i = notFound Then Err.Raise 9, TypeName(Me) & ".Remove"
+    GetIndex Key, i, , groupSlot, , posInGroup, , IgnoreErrors
+    If i <= notFound Then
+        If IgnoreErrors Then Exit Function
+        #If StrictScriptingMode Then
+            Err.Raise 32811, , "Method 'Remove' of object 'IDictionary' failed"
+        #Else
+            Err.Raise 9, TypeName(Me) & ".Remove"
+        #End If
+    End If
+    Remove = True
     If Vars.UsedCount = 1 Then
         Init
-        Exit Sub
+        Exit Function
     End If
     '
     ClearMapIndex groupSlot, posInGroup
@@ -1263,7 +1398,7 @@ Public Sub Remove(ByRef Key As Variant)
                 #End If
             End If
         End If
-        Exit Sub
+        Exit Function
     End If
     If Vars.Count > Vars.UsedCount Then
         i = lastPos - 1
@@ -1291,7 +1426,7 @@ Public Sub Remove(ByRef Key As Variant)
         Vars.Keys(lastPos).Value = Empty
     #End If
     Vars.Count = Vars.Count - 1
-End Sub
+End Function
 
 Public Sub RemoveAll()
     Init
@@ -1400,8 +1535,13 @@ Friend Sub InitStructs(ByRef dict As Dictionary _
         saPtrs(3) = VarPtr(h.saP)
         InitSafeArray h.saP, ptrSize
         '
-        'The only API call on Windows VB*
-        CopyMemory ByVal VarPtr(Mem) + ptrSize * 3, saPtrs(3), ptrSize
+        #If Mac Then
+            memmove ByVal VarPtr(Mem) + ptrSize * 3, saPtrs(3), ptrSize
+        #ElseIf TWINBASIC Then
+            PutMemPtr VarPtr(Mem) + ptrSize * 3, saPtrs(3)
+        #Else
+            MemLongPtr(VarPtr(Mem) + ptrSize * 3) = saPtrs(3)
+        #End If
         '
         'Store virtual table pointer for finding terminated instances
         h.saP.pvData = Vars.Dealloc.ThisPtr
@@ -1557,7 +1697,7 @@ Friend Sub InitStructs(ByRef dict As Dictionary _
     #End If
     '
 #If Mac Then
-    CopyMemory ByVal VarPtr(m), saPtrs(0), ptrSize * 4
+    memmove ByVal VarPtr(m), saPtrs(0), ptrSize * 4
 #Else
     If h.isScrAvailable Then
         If v.Compare <= vbTextCompare Then v.LocaleID = h.lcid
@@ -1639,6 +1779,44 @@ Initialized:
 #End If
 End Sub
 
+#If Windows And FastDealloc Then
+Public Property Let MemLongPtr(ByVal memAddress As LongPtr _
+                             , ByVal newValue As LongPtr)
+#If Win64 Then 'Define Variant Size in # pointers
+    Const ptrsNeeded As Long = 3 '8 * 3 = 24
+#Else
+    Const ptrsNeeded As Long = 4 '4 * 4 = 16
+#End If
+    Const VT_BYREF As Long = &H4000
+    Dim memValue As Variant
+    Dim remoteVT As Variant
+    Dim fakeVariant(0 To ptrsNeeded - 1) As LongPtr 'Avoid UDT
+    '
+    fakeVariant(ptrsNeeded - 2) = VarPtr(memValue)
+    fakeVariant(0) = vbInteger + VT_BYREF
+    VariantCopy remoteVT, VarPtr(fakeVariant(0)) 'Init VarType ByRef
+    '
+#If Win64 Then 'Cannot assign LongLong ByRef
+    Dim c As Currency
+    RemoteAssign memValue, VarPtr(newValue), remoteVT, vbCurrency + VT_BYREF, c, memValue
+    RemoteAssign memValue, memAddress, remoteVT, vbCurrency + VT_BYREF, memValue, c
+#Else 'Can assign Long ByRef
+    RemoteAssign memValue, memAddress, remoteVT, vbLong + VT_BYREF, memValue, newValue
+#End If
+End Property
+Private Sub RemoteAssign(ByRef memValue As Variant _
+                       , ByRef memAddress As LongPtr _
+                       , ByRef remoteVT As Variant _
+                       , ByVal newVT As VbVarType _
+                       , ByRef targetVariable As Variant _
+                       , ByRef newValue As Variant)
+    memValue = memAddress
+    remoteVT = newVT
+    targetVariable = newValue
+    remoteVT = vbEmpty
+End Sub
+#End If
+
 'https://stackoverflow.com/a/9516565/8488913
 Private Property Get InIde() As Boolean
     Debug.Assert SetTrue(InIde)
@@ -1664,6 +1842,7 @@ Private Sub FixStackBugs(ByRef h As Globals)
     Dim newEnumPtr As LongPtr
     Dim itemGetPtr As LongPtr
     Dim terminatePtr As LongPtr
+    Dim iClassModuleEvtPtr As LongPtr
     '
     'NewEnum
     h.saP.pvData = Vars.Dealloc.ThisPtr 'Dictionary
@@ -1675,8 +1854,9 @@ Private Sub FixStackBugs(ByRef h As Globals)
     itemGetPtr = Mem.RPtr(0)
     '
     '_Terminate address
-    h.saP.pvData = Vars.Dealloc.ThisPtr + LocalSize(Vars.Dealloc.ThisPtr) _
-                                        - ptrSize * 3 'IClassModuleEvt
+    'Needs adjusting for if implementing interfaces or events
+    iClassModuleEvtPtr = Vars.Dealloc.ThisPtr + 96 + LenB(Vars) + LenB(Mem)
+    h.saP.pvData = iClassModuleEvtPtr
     h.saP.pvData = Mem.RPtr(0) + ptrSize * opNumTerminate
     terminatePtr = Mem.RPtr(0)
     '
@@ -1751,12 +1931,14 @@ Public Function Factory() As Dictionary
     Set Factory = New Dictionary
 End Function
 
-Public Property Get HashVal(ByRef Key As Variant) As Long
-    GetIndex Key, HashVal, hashOnly:=True
+Public Property Get HashVal(ByRef Key As Variant _
+                          , Optional ByVal IgnoreErrors As Boolean = False) As Long
+    GetIndex Key, , HashVal, hashOnly:=True, IgnoreErrors:=IgnoreErrors
 End Property
 
 Private Function DictEnum() As IUnknown
     Dim hadEnum As Boolean
+    Dim i As Long
     '
     If Not Vars.IsInitialized Then Exit Function 'If called from IDE before Init
     With Vars.Enums
@@ -1774,20 +1956,22 @@ Private Function DictEnum() As IUnknown
     Dim vtblptr As LongPtr
     '
     If vtbl(0) = NullPtr Then
-        CopyMemory vtblptr, ByVal tempPtr, ptrSize
-        CopyMemory vtbl(0), ByVal vtblptr, ptrSize * 7 'Copy original virtual table
+        GetMemPtr tempPtr, vtblptr
+        For i = 0 To 6 'Copy original virtual table
+            GetMemPtr vtblptr + ptrSize * i, vtbl(i)
+        Next
         vtbl(7) = vtblptr 'Save original vtbl at additional position
-        CopyMemory vtblptr, ByVal Vars.Dealloc.ThisPtr, ptrSize
-        CopyMemory vtbl(3), ByVal vtblptr + ptrSize * 11, ptrSize 'Replace 'Next'
+        GetMemPtr Vars.Dealloc.ThisPtr, vtblptr
+        GetMemPtr vtblptr + ptrSize * 11, vtbl(3) 'Replace 'Next'
     End If
     '
     'Swap original vTable with our own
-    CopyMemory ByVal tempPtr, VarPtr(vtbl(0)), ptrSize
+    PutMemPtr tempPtr, VarPtr(vtbl(0))
 #End If
     '
-    Dim i As Long
     Dim hasGaps As Boolean: hasGaps = (Vars.UsedCount < Vars.Count)
     '
+    i = 0
     If hasGaps Then
         #If x64 Then
             Do While Vars.Meta(i) = hmRemoved: i = i + 1: Loop
@@ -2224,3 +2408,37 @@ Public Property Get InstanceCount(Optional ByVal iType As InstanceType = itAll) 
 End Property
 #End If
 #End If
+
+'Calling Item (Get) with a missing Key will:
+' - throw if CreateEmptyItemIfMissingKey and StrictScriptingMode are both False
+' - will add the missing Key and an Empty Item if any of the two are True
+Public Property Get StrictScriptingMode() As Boolean
+#If StrictScriptingMode Then
+    StrictScriptingMode = True
+#End If
+End Property
+Public Property Get CreateEmptyItemIfMissingKey() As Boolean
+    CreateEmptyItemIfMissingKey = Vars.CreateEmptyIfMissingKey
+End Property
+Public Property Let CreateEmptyItemIfMissingKey(ByVal newValue As Boolean)
+    Vars.CreateEmptyIfMissingKey = newValue
+End Property
+
+'Alternative method to Item (Get)
+'Does not throw
+'Does not add Key if missing
+Public Function TryGetItem(ByRef Key As Variant _
+                         , ByRef OutItem As Variant) As Boolean
+    Dim i As Long: GetIndex Key, i, IgnoreErrors:=True
+    If i <= notFound Then Exit Function
+#If x64 Then
+    If Vars.Meta(i) And isItemObjBit Then
+#Else
+    If Vars.Keys(i).IsItemObj Then
+#End If
+        Set OutItem = Vars.Items(i)
+    Else
+        OutItem = Vars.Items(i)
+    End If
+    TryGetItem = True
+End Function
