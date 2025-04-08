@@ -18,7 +18,7 @@ Although the ```OLE Automation``` project reference should be enabled by default
 - Easy replacement for Scripting.Dictionary
 - Quite fast for a native VBA Dictionary 
 - Mac compatible
-- Overcomes VB Class Deallocation design and has linear deallocation speed. See [Faster VB6 / VBA class deallocation](https://codereview.stackexchange.com/questions/294682/faster-vb6-vba-class-deallocation)
+- Overcomes VB Class Deallocation design and has linear deallocation speed. See [Fast Deallocation](https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#fast-deallocation)
 - Overcomes VB x64 Compiler Issues. See [x64 Assembly fixes](https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#x64-assembly)
 - Automatic Rehashing and Resizing
 - Supports ```For Each```
