@@ -225,6 +225,12 @@ Private Type ScrDictLayout 'Scripting.Dictionary memory layout
     lcid As Long
     unkPtrs(0 To 2) As LongPtr
 End Type
+
+Private Type FakeVariant
+    vt As Integer
+    wReserved(0 To 2) As Integer
+    ptrs(0 To 1) As LongPtr
+End Type
 #End If
 
 Private Type SAFEARRAYBOUND
@@ -720,7 +726,7 @@ Private Sub GetIndex(ByRef Key As Variant _
                    , Optional ByRef posInGroup As Long _
                    , Optional ByVal hashOnly As Boolean = False _
                    , Optional ByVal IgnoreErrors As Boolean = False)
-    #If (x32) Or Mac Then
+    #If x32 Or Mac Then
         Const vbLongLong = 20
     #End If
     If Vars.Hash.GroupCount = 0 Then Init
@@ -1780,21 +1786,16 @@ Initialized:
 End Sub
 
 #If Windows And FastDealloc Then
-Public Property Let MemLongPtr(ByVal memAddress As LongPtr _
-                             , ByVal newValue As LongPtr)
-#If Win64 Then 'Define Variant Size in # pointers
-    Const ptrsNeeded As Long = 3 '8 * 3 = 24
-#Else
-    Const ptrsNeeded As Long = 4 '4 * 4 = 16
-#End If
+Private Property Let MemLongPtr(ByVal memAddress As LongPtr _
+                              , ByVal newValue As LongPtr)
     Const VT_BYREF As Long = &H4000
     Dim memValue As Variant
     Dim remoteVT As Variant
-    Dim fakeVariant(0 To ptrsNeeded - 1) As LongPtr 'Avoid UDT
+    Dim fv As FakeVariant
     '
-    fakeVariant(ptrsNeeded - 2) = VarPtr(memValue)
-    fakeVariant(0) = vbInteger + VT_BYREF
-    VariantCopy remoteVT, VarPtr(fakeVariant(0)) 'Init VarType ByRef
+    fv.ptrs(0) = VarPtr(memValue)
+    fv.vt = vbInteger + VT_BYREF
+    VariantCopy remoteVT, VarPtr(fv) 'Init VarType ByRef
     '
 #If Win64 Then 'Cannot assign LongLong ByRef
     Dim c As Currency
@@ -1854,7 +1855,7 @@ Private Sub FixStackBugs(ByRef h As Globals)
     itemGetPtr = Mem.RPtr(0)
     '
     '_Terminate address
-    'Needs adjusting for if implementing interfaces or events
+    'Needs size adjustment if implementing interfaces or events
     iClassModuleEvtPtr = Vars.Dealloc.ThisPtr + 96 + LenB(Vars) + LenB(Mem)
     h.saP.pvData = iClassModuleEvtPtr
     h.saP.pvData = Mem.RPtr(0) + ptrSize * opNumTerminate
@@ -2158,7 +2159,13 @@ Private Sub Class_Terminate()
         #If x64StackIssues Then
             If .nestingLevel = 1 Then
                 .saI.pvData = .stTerminate.argSizeInvokePtr
-                Mem.RInt(0) = .stTerminate.argSize(earlyBound)
+                If Mem.RInt(0) = .stTerminate.argSize(earlyBound) Then
+                    'Compile On Demand or user modified this class
+                    .stTerminate.previousCallType = earlyBound
+                Else
+                    Mem.RInt(0) = .stTerminate.argSize(earlyBound)
+                    .stTerminate.previousCallType = lateBound
+                End If
                 .saI.pvData = .stTerminate.argSizePCodePtr
                 Mem.RInt(0) = .stTerminate.argSize(earlyBound)
                 .saI.pvData = .dPtr
@@ -2175,9 +2182,9 @@ Private Sub Class_Terminate()
             Loop
             #If x64StackIssues Then
                 .saI.pvData = .stTerminate.argSizeInvokePtr
-                Mem.RInt(0) = .stTerminate.argSize(lateBound)
+                Mem.RInt(0) = .stTerminate.argSize(.stTerminate.previousCallType)
                 .saI.pvData = .stTerminate.argSizePCodePtr
-                Mem.RInt(0) = .stTerminate.argSize(lateBound)
+                Mem.RInt(0) = .stTerminate.argSize(.stTerminate.previousCallType)
                 .saI.pvData = .dPtr
             #End If
         End If
