@@ -2159,7 +2159,13 @@ Private Sub Class_Terminate()
         #If x64StackIssues Then
             If .nestingLevel = 1 Then
                 .saI.pvData = .stTerminate.argSizeInvokePtr
-                Mem.RInt(0) = .stTerminate.argSize(earlyBound)
+                If Mem.RInt(0) = .stTerminate.argSize(earlyBound) Then
+                    'Compile On Demand or user modified this class
+                    .stTerminate.previousCallType = earlyBound
+                Else
+                    Mem.RInt(0) = .stTerminate.argSize(earlyBound)
+                    .stTerminate.previousCallType = lateBound
+                End If
                 .saI.pvData = .stTerminate.argSizePCodePtr
                 Mem.RInt(0) = .stTerminate.argSize(earlyBound)
                 .saI.pvData = .dPtr
@@ -2176,9 +2182,9 @@ Private Sub Class_Terminate()
             Loop
             #If x64StackIssues Then
                 .saI.pvData = .stTerminate.argSizeInvokePtr
-                Mem.RInt(0) = .stTerminate.argSize(lateBound)
+                Mem.RInt(0) = .stTerminate.argSize(.stTerminate.previousCallType)
                 .saI.pvData = .stTerminate.argSizePCodePtr
-                Mem.RInt(0) = .stTerminate.argSize(lateBound)
+                Mem.RInt(0) = .stTerminate.argSize(.stTerminate.previousCallType)
                 .saI.pvData = .dPtr
             #End If
         End If
