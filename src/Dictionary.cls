@@ -257,8 +257,8 @@ Private Type StackTracker
     argSize(earlyBound To lateBound) As Integer
     currentCallType As CallType
     previousCallType As CallType
-    callTypeAddr As LongPtr
     callTypePtr As LongPtr
+    saCallType As SAFEARRAY_1D
 End Type
 #End If
              
@@ -327,6 +327,10 @@ Private Type MemoryAccessors
     RPtr() As LongPtr
 #If Windows Then
     TextHash() As Collection
+#If x64StackIssues Then
+    ItemGetCallPtr() As LongPtr
+    NewEnumCallPtr() As LongPtr
+#End If
 #End If
 End Type
 
@@ -387,7 +391,9 @@ Attribute NewEnum.VB_UserMemId = -4
 'Attribute NewEnum.VB_UserMemId = -4
 #If x64StackIssues Then
     With Mem.Common(0)
-        If .stNewEnum.currentCallType <> .stNewEnum.previousCallType Then
+        If Mem.NewEnumCallPtr(0) <> .stNewEnum.callTypePtr Then
+            FixStackBugs Mem.Common(0)
+        ElseIf .stNewEnum.currentCallType <> .stNewEnum.previousCallType Then
             .saI.pvData = .stNewEnum.argSizePCodePtr
             Mem.RInt(0) = .stNewEnum.argSize(.stNewEnum.currentCallType)
             .saI.pvData = .dPtr
@@ -416,7 +422,9 @@ Attribute Item.VB_UserMemId = 0
 'Attribute Item.VB_UserMemId = 0
 #If x64StackIssues Then
     With Mem.Common(0)
-        If .stItemGet.currentCallType <> .stItemGet.previousCallType Then
+        If Mem.ItemGetCallPtr(0) <> .stItemGet.callTypePtr Then
+            FixStackBugs Mem.Common(0)
+        ElseIf .stItemGet.currentCallType <> .stItemGet.previousCallType Then
             .saI.pvData = .stItemGet.argSizePCodePtr
             Mem.RInt(0) = .stItemGet.argSize(.stItemGet.currentCallType)
             .saI.pvData = .dPtr
@@ -1513,7 +1521,15 @@ Friend Sub InitStructs(ByRef dict As Dictionary _
     Static h As Globals
     Static saL As SAFEARRAY_1D
     Static saH As SAFEARRAY_1D
-    Static saPtrs(0 To 4) As LongPtr
+#If Mac Then
+    Const saPtrsCount As Long = 4
+#ElseIf x64StackIssues Then
+    Const saPtrsCount As Long = 7
+#Else
+    Const saPtrsCount As Long = 5
+#End If
+    Const saPtrsUB As Long = saPtrsCount - 1
+    Static saPtrs(0 To saPtrsUB) As LongPtr
     Static lastInstance As Dictionary
     Dim prevPtr As LongPtr
     Dim temp As Object
@@ -1682,6 +1698,11 @@ Friend Sub InitStructs(ByRef dict As Dictionary _
             h.saP.pvData = VarPtr(Mem) + ptrSize * 2
             Mem.RPtr(0) = saPtrs(2)
             '
+            InitSafeArray h.stItemGet.saCallType, ptrSize
+            InitSafeArray h.stNewEnum.saCallType, ptrSize
+            saPtrs(5) = VarPtr(h.stItemGet.saCallType)
+            saPtrs(6) = VarPtr(h.stNewEnum.saCallType)
+            '
             FixStackBugs h
         #End If
 #End If
@@ -1703,15 +1724,15 @@ Friend Sub InitStructs(ByRef dict As Dictionary _
     #End If
     '
 #If Mac Then
-    memmove ByVal VarPtr(m), saPtrs(0), ptrSize * 4
+    memmove ByVal VarPtr(m), saPtrs(0), ptrSize * saPtrsCount
 #Else
     If h.isScrAvailable Then
         If v.Compare <= vbTextCompare Then v.LocaleID = h.lcid
     End If
     '
     h.saP.pvData = VarPtr(m)
-    h.saP.rgsabound0.cElements = 5
-    For i = 0 To 4
+    h.saP.rgsabound0.cElements = saPtrsCount
+    For i = 0 To saPtrsUB
         Mem.RPtr(i) = saPtrs(i)
     Next i
     h.saP.rgsabound0.cElements = 1
@@ -1769,8 +1790,8 @@ Friend Sub InitStructs(ByRef dict As Dictionary _
     '
 Initialized:
 #If x64StackIssues Then
-    h.saP.pvData = h.stItemGet.callTypeAddr
-    If Mem.RPtr(0) <> h.stItemGet.callTypePtr Then FixStackBugs h
+    If m.ItemGetCallPtr(0) <> h.stItemGet.callTypePtr Or _
+       m.NewEnumCallPtr(0) <> h.stNewEnum.callTypePtr Then FixStackBugs h
 #End If
     '
     h.saP.pvData = h.dPtr
@@ -1910,7 +1931,8 @@ Private Sub FixStackSize(ByRef h As Globals _
         h.saP.pvData = funcPtr + &H1C
         h.saP.rgsabound0.cElements = 4
         '
-        st.callTypeAddr = h.saP.pvData + ptrSize * 2
+        st.saCallType.pvData = h.saP.pvData + ptrSize * 2
+        st.saCallType.rgsabound0.cElements = 1
         st.callTypePtr = VarPtr(st.currentCallType)
         '
         '49890C24     ;MOV QWORD PTR [R12],RCX
