@@ -393,7 +393,8 @@ Attribute NewEnum.VB_UserMemId = -4
     With Mem.Common(0)
         If Mem.NewEnumCallPtr(0) <> .stNewEnum.callTypePtr Then
             FixStackBugs Mem.Common(0)
-        ElseIf .stNewEnum.currentCallType <> .stNewEnum.previousCallType Then
+        End If
+        If .stNewEnum.currentCallType <> .stNewEnum.previousCallType Then
             .saI.pvData = .stNewEnum.argSizePCodePtr
             Mem.RInt(0) = .stNewEnum.argSize(.stNewEnum.currentCallType)
             .saI.pvData = .dPtr
@@ -424,7 +425,8 @@ Attribute Item.VB_UserMemId = 0
     With Mem.Common(0)
         If Mem.ItemGetCallPtr(0) <> .stItemGet.callTypePtr Then
             FixStackBugs Mem.Common(0)
-        ElseIf .stItemGet.currentCallType <> .stItemGet.previousCallType Then
+        End If
+        If .stItemGet.currentCallType <> .stItemGet.previousCallType Then
             .saI.pvData = .stItemGet.argSizePCodePtr
             Mem.RInt(0) = .stItemGet.argSize(.stItemGet.currentCallType)
             .saI.pvData = .dPtr
