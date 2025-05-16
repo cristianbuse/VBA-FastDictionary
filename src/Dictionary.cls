@@ -393,8 +393,8 @@ Attribute NewEnum.VB_UserMemId = -4
     With Mem.Common(0)
         If Mem.NewEnumCallPtr(0) <> .stNewEnum.callTypePtr Then
             FixStackBugs Mem.Common(0)
-        End If
-        If .stNewEnum.currentCallType <> .stNewEnum.previousCallType Then
+            .stNewEnum.previousCallType = .stNewEnum.currentCallType
+        ElseIf .stNewEnum.currentCallType <> .stNewEnum.previousCallType Then
             .saI.pvData = .stNewEnum.argSizePCodePtr
             Mem.RInt(0) = .stNewEnum.argSize(.stNewEnum.currentCallType)
             .saI.pvData = .dPtr
@@ -425,8 +425,8 @@ Attribute Item.VB_UserMemId = 0
     With Mem.Common(0)
         If Mem.ItemGetCallPtr(0) <> .stItemGet.callTypePtr Then
             FixStackBugs Mem.Common(0)
-        End If
-        If .stItemGet.currentCallType <> .stItemGet.previousCallType Then
+            .stItemGet.previousCallType = .stItemGet.currentCallType
+        ElseIf .stItemGet.currentCallType <> .stItemGet.previousCallType Then
             .saI.pvData = .stItemGet.argSizePCodePtr
             Mem.RInt(0) = .stItemGet.argSize(.stItemGet.currentCallType)
             .saI.pvData = .dPtr
@@ -1904,11 +1904,12 @@ Private Sub FixStackSize(ByRef h As Globals _
         Exit Sub
     End If
     '
+    st.argSize(earlyBound) = initialSize
+    st.argSize(lateBound) = newSize
+    '
     'Update size of aguments for 'invoked' asm i.e. H in 'SUB R12, 0xHHHH
     st.argSizeInvokePtr = funcPtr + &H18
     h.saI.pvData = st.argSizeInvokePtr
-    st.argSize(earlyBound) = Mem.RInt(0)
-    st.argSize(lateBound) = newSize
     Mem.RInt(0) = newSize
     '
     'PCode Argument Size
@@ -1917,12 +1918,6 @@ Private Sub FixStackSize(ByRef h As Globals _
     st.argSizePCodePtr = Mem.RPtr(0) + 8
     h.saI.pvData = st.argSizePCodePtr
     '
-    If st.argSize(earlyBound) = newSize Then st.argSize(earlyBound) = Mem.RInt(0)
-    If st.argSize(earlyBound) = newSize Then 'Use defaults
-        st.argSize(earlyBound) = initialSize
-        Mem.RInt(0) = initialSize
-    End If
-    '
     'https://github.com/cristianbuse/VBA-FastDictionary/blob/master
     'See /Implementation.md#item-get-stack-fix
     'See /Implementation.md#newenum-stack-fix
@@ -1930,6 +1925,7 @@ Private Sub FixStackSize(ByRef h As Globals _
     If isTerminate Then 'Size will be managed based on nesting level
         Mem.RInt(0) = newSize
     Else 'Size will be managed based on call type
+        Mem.RInt(0) = st.argSize(st.currentCallType)
         h.saP.pvData = funcPtr + &H1C
         h.saP.rgsabound0.cElements = 4
         '
