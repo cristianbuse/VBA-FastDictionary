@@ -228,7 +228,9 @@ End Type
 
 Private Type FakeVariant
     vt As Integer
-    wReserved(0 To 2) As Integer
+    wReserved1 As Integer
+    wReserved2 As Integer
+    wReserved3 As Integer
     ptrs(0 To 1) As LongPtr
 End Type
 #End If
