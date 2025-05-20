@@ -249,7 +249,7 @@ Private Type SAFEARRAY_1D
 End Type
         
 #If x64StackIssues Then
-Private Enum CallType
+Private Enum MethodCallType
     earlyBound = 0
     lateBound = 1
 End Enum
@@ -257,10 +257,10 @@ Private Type StackTracker
     argSizeInvokePtr As LongPtr
     argSizePCodePtr As LongPtr
     argSize(earlyBound To lateBound) As Integer
-    currentCallType As CallType
-    previousCallType As CallType
+    callType As MethodCallType
     callTypePtr As LongPtr
     saCallType As SAFEARRAY_1D
+    saArgSize As SAFEARRAY_1D
 End Type
 #End If
              
@@ -332,6 +332,8 @@ Private Type MemoryAccessors
 #If x64StackIssues Then
     ItemGetCallPtr() As LongPtr
     NewEnumCallPtr() As LongPtr
+    ItemGetArgSizePCode() As Integer
+    NewEnumArgSizePCode() As Integer
 #End If
 #End If
 End Type
@@ -384,7 +386,7 @@ Private Mem As MemoryAccessors
 
 'Do NOT delete the Optional dummy parameter. It was added to increase the
 ' size of the assembly used for late-bound calls on x64. The asm is then
-' modified in such a way that 'currentCallType' is set appropriately
+' modified in such a way that 'callType' is set appropriately
 ' in the corresponding stack tracker. This allows correction of stack size
 
 '@Enumerator
@@ -393,16 +395,12 @@ Attribute NewEnum.VB_UserMemId = -4
 'Attribute NewEnum.VB_UserMemId = -4
 #If x64StackIssues Then
     With Mem.Common(0)
-        If Mem.NewEnumCallPtr(0) <> .stNewEnum.callTypePtr Then
+        If Mem.NewEnumCallPtr(0) = .stNewEnum.callTypePtr Then
+            Mem.NewEnumArgSizePCode(0) = .stNewEnum.argSize(.stNewEnum.callType)
+        Else
             FixStackBugs Mem.Common(0)
-            .stNewEnum.previousCallType = .stNewEnum.currentCallType
-        ElseIf .stNewEnum.currentCallType <> .stNewEnum.previousCallType Then
-            .saI.pvData = .stNewEnum.argSizePCodePtr
-            Mem.RInt(0) = .stNewEnum.argSize(.stNewEnum.currentCallType)
-            .saI.pvData = .dPtr
-            .stNewEnum.previousCallType = .stNewEnum.currentCallType
         End If
-        .stNewEnum.currentCallType = earlyBound
+        .stNewEnum.callType = earlyBound
     End With
 #End If
     Set NewEnum = DictEnum
@@ -413,7 +411,7 @@ End Function
 'https://github.com/cristianbuse/VBA-FastDictionary/issues/16
 
 'The assembly for late-bound calls, implicit as default method or explicit,
-' is modified in such a way that 'currentCallType' is set appropriately
+' is modified in such a way that 'callType' is set appropriately
 ' in the corresponding stack tracker. This allows correction of stack size
 
 'Raises Error:
@@ -425,16 +423,12 @@ Attribute Item.VB_UserMemId = 0
 'Attribute Item.VB_UserMemId = 0
 #If x64StackIssues Then
     With Mem.Common(0)
-        If Mem.ItemGetCallPtr(0) <> .stItemGet.callTypePtr Then
+        If Mem.ItemGetCallPtr(0) = .stItemGet.callTypePtr Then
+            Mem.ItemGetArgSizePCode(0) = .stItemGet.argSize(.stItemGet.callType)
+        Else
             FixStackBugs Mem.Common(0)
-            .stItemGet.previousCallType = .stItemGet.currentCallType
-        ElseIf .stItemGet.currentCallType <> .stItemGet.previousCallType Then
-            .saI.pvData = .stItemGet.argSizePCodePtr
-            Mem.RInt(0) = .stItemGet.argSize(.stItemGet.currentCallType)
-            .saI.pvData = .dPtr
-            .stItemGet.previousCallType = .stItemGet.currentCallType
         End If
-        .stItemGet.currentCallType = earlyBound
+        .stItemGet.callType = earlyBound
     End With
 #End If
     Dim i As Long
@@ -1528,7 +1522,7 @@ Friend Sub InitStructs(ByRef dict As Dictionary _
 #If Mac Then
     Const saPtrsCount As Long = 4
 #ElseIf x64StackIssues Then
-    Const saPtrsCount As Long = 7
+    Const saPtrsCount As Long = 9
 #Else
     Const saPtrsCount As Long = 5
 #End If
@@ -1706,6 +1700,11 @@ Friend Sub InitStructs(ByRef dict As Dictionary _
             InitSafeArray h.stNewEnum.saCallType, ptrSize
             saPtrs(5) = VarPtr(h.stItemGet.saCallType)
             saPtrs(6) = VarPtr(h.stNewEnum.saCallType)
+            '
+            InitSafeArray h.stItemGet.saArgSize, intSize
+            InitSafeArray h.stNewEnum.saArgSize, intSize
+            saPtrs(7) = VarPtr(h.stItemGet.saArgSize)
+            saPtrs(8) = VarPtr(h.stNewEnum.saArgSize)
             '
             FixStackBugs h
         #End If
@@ -1901,8 +1900,8 @@ Private Sub FixStackSize(ByRef h As Globals _
     h.saP.pvData = funcPtr + &H15 'SUB R12, 0x????
     If (Mem.RPtr(0) And &HFFFFFF^) <> &HEC8149^ Then 'Not x64 architecture?
         'Avoid accessing invalid memory later on
-        st.argSizeInvokePtr = VarPtr(st.currentCallType)
-        st.argSizePCodePtr = VarPtr(st.previousCallType)
+        st.argSizeInvokePtr = VarPtr(st.callType)
+        st.argSizePCodePtr = st.argSizeInvokePtr
         Exit Sub
     End If
     '
@@ -1927,13 +1926,15 @@ Private Sub FixStackSize(ByRef h As Globals _
     If isTerminate Then 'Size will be managed based on nesting level
         Mem.RInt(0) = newSize
     Else 'Size will be managed based on call type
-        Mem.RInt(0) = st.argSize(st.currentCallType)
+        Mem.RInt(0) = st.argSize(st.callType)
+        st.saArgSize.pvData = st.argSizePCodePtr
+        st.saArgSize.rgsabound0.cElements = 1
         h.saP.pvData = funcPtr + &H1C
         h.saP.rgsabound0.cElements = 4
         '
         st.saCallType.pvData = h.saP.pvData + ptrSize * 2
         st.saCallType.rgsabound0.cElements = 1
-        st.callTypePtr = VarPtr(st.currentCallType)
+        st.callTypePtr = VarPtr(st.callType)
         '
         '49890C24     ;MOV QWORD PTR [R12],RCX
         '49895424 08  ;MOV QWORD PTR [R12+08],RDX
@@ -2183,10 +2184,10 @@ Private Sub Class_Terminate()
                 .saI.pvData = .stTerminate.argSizeInvokePtr
                 If Mem.RInt(0) = .stTerminate.argSize(earlyBound) Then
                     'Compile On Demand or user modified this class
-                    .stTerminate.previousCallType = earlyBound
+                    .stTerminate.callType = earlyBound
                 Else
                     Mem.RInt(0) = .stTerminate.argSize(earlyBound)
-                    .stTerminate.previousCallType = lateBound
+                    .stTerminate.callType = lateBound
                 End If
                 .saI.pvData = .stTerminate.argSizePCodePtr
                 Mem.RInt(0) = .stTerminate.argSize(earlyBound)
@@ -2204,9 +2205,9 @@ Private Sub Class_Terminate()
             Loop
             #If x64StackIssues Then
                 .saI.pvData = .stTerminate.argSizeInvokePtr
-                Mem.RInt(0) = .stTerminate.argSize(.stTerminate.previousCallType)
+                Mem.RInt(0) = .stTerminate.argSize(.stTerminate.callType)
                 .saI.pvData = .stTerminate.argSizePCodePtr
-                Mem.RInt(0) = .stTerminate.argSize(.stTerminate.previousCallType)
+                Mem.RInt(0) = .stTerminate.argSize(.stTerminate.callType)
                 .saI.pvData = .dPtr
             #End If
         End If
