@@ -814,13 +814,19 @@ Private Sub GetIndex(ByRef Key As Variant _
         Err.Raise 5, , "Cannot hash an Array or User Defined Type"
     ElseIf vt > vbNull Then
         Dim m As HashMeta
-        If vt = vbError Then
-            m = hmError
-            Mem.Common(0).d = CDbl(Key)
-        Else
-            m = hmNumber
-            Mem.Common(0).d = Key
-        End If
+        With Mem.Common(0)
+            If vt = vbError Then
+                m = hmError
+                .d = CDbl(Key)
+            Else
+                m = hmNumber
+                .d = Key
+            End If
+            #If x64 Then
+                .saP.pvData = .dPtr
+            #End If
+            .saI.pvData = .dPtr
+        End With
         Const n1& = 1201, n2& = 2701, n3& = 131, n4& = 28571
         Const infOrNaN As Integer = &H7FF0 'Exponent bits for Double Float
         #If x64 Then
@@ -1605,6 +1611,7 @@ Friend Sub InitStructs(ByRef dict As Dictionary _
             If v.Dealloc.ThisPtr <> Vars.Dealloc.ThisPtr Then
                 Vars.DefInstance.InitStructs dict, v, m, 0
             End If
+            h.saP.pvData = h.dPtr
             Exit Sub
         End If
         '
@@ -1888,6 +1895,8 @@ Private Sub FixStackBugs(ByRef h As Globals)
     FixStackSize h, itemGetPtr, &H18, &H800, False, h.stItemGet
     FixStackSize h, newEnumPtr, &H18, &H800, False, h.stNewEnum
     FixStackSize h, terminatePtr, &H8, &H800, True, h.stTerminate
+    h.saI.pvData = h.dPtr
+    h.saP.pvData = h.dPtr
 End Sub
 Private Sub FixStackSize(ByRef h As Globals _
                        , ByVal funcPtr As LongPtr _
@@ -1947,7 +1956,6 @@ Private Sub FixStackSize(ByRef h As Globals _
         Mem.RPtr(3) = Mem.RPtr(3) And &HFFFFFFFFFF000000^ Or &H100C6^
         h.saP.rgsabound0.cElements = 1
     End If
-    h.saI.pvData = h.dPtr
 End Sub
 #End If
     
