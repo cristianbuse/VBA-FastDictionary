@@ -348,6 +348,7 @@ Private Type TempHash
     groupSlot As Long
     controlByte As Long
     isSet As Boolean
+    matches As LongPtr
 End Type
 
 Private Type DictionaryVariables
@@ -367,7 +368,7 @@ Private Type DictionaryVariables
     UsedCount As Long
     AllowDuplicateKeys As Boolean
     CreateEmptyIfMissingKey As Boolean
-    AddHash As TempHash
+    LastHash As TempHash
     DefInstance As Dictionary 'Avoids deallocation of default (Predeclared) dict
     Dealloc As DeallocVars
     IsInitialized As Boolean
@@ -437,11 +438,11 @@ Attribute Item.VB_UserMemId = 0
 #If StrictScriptingMode = 0 Then
     If Var.CreateEmptyIfMissingKey Then
 #End If
-        GetIndex Key, i, Var.AddHash.hVal _
-                       , Var.AddHash.groupSlot _
-                       , Var.AddHash.controlByte
+        GetIndex Key, i, Var.LastHash.hVal _
+                       , Var.LastHash.groupSlot _
+                       , Var.LastHash.controlByte
         If i = notFound Then
-            Var.AddHash.isSet = True
+            Var.LastHash.isSet = True
             Add Key, Empty
             Exit Property
         End If
@@ -467,11 +468,11 @@ Public Property Let Item(ByRef Key As Variant, ByRef Item As Variant)
     If IsObject(Item) Or (VarType(Item) = vbDataObject) Then
         Err.Raise 450, TypeName(Me) & ".Item", "'Set' is required"
     End If
-    Dim i As Long: GetIndex Key, i, Var.AddHash.hVal _
-                                  , Var.AddHash.groupSlot _
-                                  , Var.AddHash.controlByte
+    Dim i As Long: GetIndex Key, i, Var.LastHash.hVal _
+                                  , Var.LastHash.groupSlot _
+                                  , Var.LastHash.controlByte
     If i = notFound Then
-        Var.AddHash.isSet = True
+        Var.LastHash.isSet = True
         Add Key, Item
         Exit Property
     End If
@@ -483,11 +484,11 @@ Public Property Let Item(ByRef Key As Variant, ByRef Item As Variant)
     Var.Items(i) = Item
 End Property
 Public Property Set Item(ByRef Key As Variant, ByRef Item As Object)
-    Dim i As Long: GetIndex Key, i, Var.AddHash.hVal _
-                                  , Var.AddHash.groupSlot _
-                                  , Var.AddHash.controlByte
+    Dim i As Long: GetIndex Key, i, Var.LastHash.hVal _
+                                  , Var.LastHash.groupSlot _
+                                  , Var.LastHash.controlByte
     If i = notFound Then
-        Var.AddHash.isSet = True
+        Var.LastHash.isSet = True
         Add Key, Item
         Exit Property
     End If
@@ -551,10 +552,10 @@ Private Sub Init(Optional ByVal newGroupCount As Long = initialGroupCount)
     #Else
         ReDim .Keys(0 To .UBound)
     #End If
+        Set .Enums.emptyColl = Nothing 'Clear NextPtr in live IEnumVariant's
+        Set .Enums.enumsColl = Nothing
+        .Enums.hasEnum = False
     End With
-    Set Var.Enums.emptyColl = Nothing 'Clear NextPtr in live IEnumVariant's
-    Set Var.Enums.enumsColl = Nothing
-    Var.Enums.hasEnum = False
 End Sub
 
 'Adds a key-item pair
@@ -572,14 +573,14 @@ Public Function Add(ByRef Key As Variant _
     Dim i As Long
     Dim controlByte As Long
     '
-    If Var.AddHash.isSet Then
-        hVal = Var.AddHash.hVal
-        groupSlot = Var.AddHash.groupSlot
-        controlByte = Var.AddHash.controlByte
-        Var.AddHash.isSet = False
+    If Var.LastHash.isSet Then
+        hVal = Var.LastHash.hVal
+        groupSlot = Var.LastHash.groupSlot
+        controlByte = Var.LastHash.controlByte
+        Var.LastHash.isSet = False
     Else
-        GetIndex Key, i, hVal, groupSlot, controlByte, , Var.AllowDuplicateKeys _
-                                                       , IgnoreErrors
+        GetIndex Key, i, hVal, groupSlot, controlByte, hashOnly:=Var.AllowDuplicateKeys _
+                                                     , IgnoreErrors:=IgnoreErrors
         If i <> notFound Then
             If IgnoreErrors Then Exit Function
             Err.Raise 457, TypeName(Me) & ".Add"
@@ -730,6 +731,7 @@ Private Sub GetIndex(ByRef Key As Variant _
                    , Optional ByRef groupSlot As Long _
                    , Optional ByRef controlByte As Long _
                    , Optional ByRef posInGroup As Long _
+                   , Optional ByRef matches As LongPtr _
                    , Optional ByVal hashOnly As Boolean = False _
                    , Optional ByVal IgnoreErrors As Boolean = False)
     #If x32 Or Mac Then
@@ -738,6 +740,8 @@ Private Sub GetIndex(ByRef Key As Variant _
     If Var.Hash.GroupCount = 0 Then Init
     Dim vt As VbVarType
     Dim i As Long
+    '
+    If Var.LastHash.isSet Then GoTo FindNext
     '
     'Hash value
     If IsObject(Key) Then vt = vbObject Else vt = VarType(Key)
@@ -862,6 +866,7 @@ Private Sub GetIndex(ByRef Key As Variant _
         outIndex = notFound
         Exit Sub
     End If
+FindNext:
     '
     #If x64 Then
         Const signBit As LongLong = &H8000000000000000^
@@ -876,17 +881,18 @@ Private Sub GetIndex(ByRef Key As Variant _
         Const byteBroadcast As Long = &H1010101
         Const positionPrime As Long = 7
     #End If
-    Dim matches As LongPtr
     Dim cMask As LongPtr
     Dim startSlot As Long: startSlot = groupSlot
     Do
         With Var.Hash.Groups(groupSlot)
-            cMask = Mem.Look(0).CountMask(.Count)
-            'Match bytes adapted from:
-            'https://graphics.stanford.edu/~seander/bithacks.html#ZeroInWord
-            matches = .Control Xor (controlByte * byteBroadcast)
-            matches = ((((matches And highBitOff) + nHighBitOff) _
-                    Xor signBit) Or matches) And cMask Xor cMask
+            If Not Var.LastHash.isSet Then
+                cMask = Mem.Look(0).CountMask(.Count)
+                'Match bytes adapted from:
+                'https://graphics.stanford.edu/~seander/bithacks.html#ZeroInWord
+                matches = .Control Xor (controlByte * byteBroadcast)
+                matches = ((((matches And highBitOff) + nHighBitOff) _
+                        Xor signBit) Or matches) And cMask Xor cMask
+            End If
             Do While matches
                 If matches = signBit Then 'Matched last element only
                     posInGroup = groupSize - 1
@@ -1357,7 +1363,7 @@ Public Function Remove(ByRef Key As Variant _
     Dim j As Long
     Dim ptr As LongPtr
     '
-    GetIndex Key, i, , groupSlot, , posInGroup, , IgnoreErrors
+    GetIndex Key, i, , groupSlot, , posInGroup, IgnoreErrors:=IgnoreErrors
     If i <= notFound Then
         If IgnoreErrors Then Exit Function
         #If StrictScriptingMode Then
@@ -2479,4 +2485,44 @@ Public Function TryGetItem(ByRef Key As Variant _
         OutItem = Var.Items(i)
     End If
     TryGetItem = True
+End Function
+
+Public Function IsDuplicate(ByRef Key As Variant) As Boolean
+    Dim i As Long
+    '
+    If Var.AllowDuplicateKeys Then
+        With Var.LastHash
+            GetIndex Key, i, .hVal, .groupSlot, .controlByte, , .matches, , True
+            If i > notFound Then
+                Var.LastHash.isSet = True
+                GetIndex Key, i, .hVal, .groupSlot, .controlByte, , .matches, , True
+                Var.LastHash.isSet = False
+                IsDuplicate = (i > notFound)
+            End If
+        End With
+    End If
+End Function
+
+Public Function ItemsByKey(ByRef Key As Variant) As Collection
+    Dim i As Long
+    Dim coll As New Collection
+    '
+    If Var.AllowDuplicateKeys Then
+        Do
+            GetIndex Key, i, Var.LastHash.hVal _
+                           , Var.LastHash.groupSlot _
+                           , Var.LastHash.controlByte _
+                           , _
+                           , Var.LastHash.matches _
+                           , IgnoreErrors:=True
+            If i = notFound Then Exit Do
+            coll.Add Var.Items(i)
+            Var.LastHash.isSet = True
+        Loop
+        Var.LastHash.isSet = False
+    Else
+        GetIndex Key, i, IgnoreErrors:=True
+        If i > notFound Then coll.Add Var.Items(i)
+    End If
+    Set ItemsByKey = coll
 End Function

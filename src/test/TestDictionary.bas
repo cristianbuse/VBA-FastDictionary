@@ -46,7 +46,7 @@ Public Sub RunAllDictionaryTests()
     TestDictionarySelf
     TestDictionaryStackFixes
     TestDictionaryTryGetItem
-    Debug.Print "Finished running tests at " & Now()
+    Debug.Print "Finished running dictionary tests at " & Now()
 End Sub
 
 Private Sub TestEmptyDictionary()
