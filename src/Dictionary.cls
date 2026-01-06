@@ -142,6 +142,7 @@ Const MaxLoadFactor As Single = 0.5
 #Const x32 = (x64 = 0) 'We don't care about x16
 #Const x64StackIssues = (Windows And x64 And (TWINBASIC = 0))
 #Const FastDealloc = (TWINBASIC = 0)
+#Const JapanYen = "\" > "}"
     
 #If x64 Then
     Const NullPtr As LongLong = 0^
@@ -615,7 +616,11 @@ Public Function Add(ByRef Key As Variant _
         Do While Var.Hash.Groups(groupSlot).WasEverFull 'Unlikely after rehash
              groupSlot = (groupSlot + 1) Mod Var.Hash.GroupCount
         Loop
+#If JapanYen Then
+        controlByte = Fix((hVal And Var.Hash.ControlMask) / Var.Hash.GroupCount)
+#Else
         controlByte = (hVal And Var.Hash.ControlMask) \ Var.Hash.GroupCount
+#End If
     ElseIf Var.Hash.Groups(groupSlot).Count = groupSize Then
         'This can only happen if ClearMapIndex was previously called
         groupSlot = hVal Mod Var.Hash.GroupCount
@@ -691,7 +696,11 @@ Private Sub Rehash(ByVal newGroupCount As Long)
             Loop
             With Var.Hash.Groups(groupSlot)
                 .Index(.Count) = i
+#If JapanYen Then
+                ctrlByte = Fix((hVal And Var.Hash.ControlMask) / Var.Hash.GroupCount)
+#Else
                 ctrlByte = (hVal And Var.Hash.ControlMask) \ Var.Hash.GroupCount
+#End If
                 .Control = .Control Or (ctrlByte * Mem.Look(0).ByteShiftL(.Count))
                 .Count = .Count + 1
                 .WasEverFull = .WasEverFull Or (.Count = groupSize)
@@ -802,7 +811,11 @@ Private Sub GetIndex(ByRef Key As Variant _
             Const oPreMask As LongLong = &H6FFFFFFFFFFFFFFF^
             Dim ll As LongLong
             ll = ObjPtr(iUnk) And oPreMask
+#If JapanYen Then
+            ll = ll + Fix((ll And &H6FFFFFFFFFFFF000^) / &H1000) + ll Mod oPrime
+#Else
             ll = ll + ll \ &H1000 + ll Mod oPrime
+#End If
             hVal = CLng(ll And [_maskHM]) Or hmObject
         #Else
             Const oPreMask As Long = &H6FFFFFFF
@@ -845,8 +858,13 @@ Private Sub GetIndex(ByRef Key As Variant _
                 hVal = (highBits * n1 + Mem.RInt(0) * n4) And [_maskHM]
             Else
                 h = Mem.RPtr(0) And factionalBits Or normalBit
+#If JapanYen Then
+                bitFinder = h Or Mem.Look(0).ExpPos(Fix((highBits And &H3F0) / &H10))
+                h = Fix(h / (bitFinder And -bitFinder))
+#Else
                 bitFinder = h Or Mem.Look(0).ExpPos((highBits And &H3F0) \ &H10)
                 h = h \ (bitFinder And -bitFinder)
+#End If
                 If highBits And iSignBit Then h = Not h - 1
                 hVal = CLng(h And maskLL) Or m
             End If
@@ -861,7 +879,11 @@ Private Sub GetIndex(ByRef Key As Variant _
     '
     'Calculate sub-hashes
     groupSlot = hVal Mod Var.Hash.GroupCount
+#If JapanYen Then
+    controlByte = Fix((hVal And Var.Hash.ControlMask) / Var.Hash.GroupCount)
+#Else
     controlByte = (hVal And Var.Hash.ControlMask) \ Var.Hash.GroupCount
+#End If
     If hashOnly Then
         outIndex = notFound
         Exit Sub
@@ -1007,7 +1029,7 @@ Private Function CountRemoved(ByVal upTo As Long) As Long
     Dim i As Long
     Dim startIndex As Long
     Dim endIndex As Long
-    Dim isSecondHalf As Boolean: isSecondHalf = (upTo > Var.Count \ 2)
+    Dim isSecondHalf As Boolean: isSecondHalf = (upTo > Int(Var.Count / 2))
     Dim totalRemoved As Long:    totalRemoved = Var.Count - Var.UsedCount
     '
     If isSecondHalf Then
@@ -1203,8 +1225,13 @@ Private Sub ClearMapIndex(ByRef groupSlot As Long, ByRef posInGroup As Long)
         If posInGroup < lastPos Then 'Swap
             .Index(posInGroup) = .Index(lastPos)
             .Control = .Control And Mem.Look(0).ByteOff(posInGroup)
+#If JapanYen Then
+            .Control = .Control Or Fix(((.Control And Mem.Look(0).ByteMask(lastPos)) _
+                                   / Mem.Look(0).ByteShiftL(lastPos - posInGroup)))
+#Else
             .Control = .Control Or ((.Control And Mem.Look(0).ByteMask(lastPos)) _
                                    \ Mem.Look(0).ByteShiftL(lastPos - posInGroup))
+#End If
         End If
         .Index(lastPos) = 0
         .Control = .Control And Mem.Look(0).ByteOff(lastPos)
