@@ -13,6 +13,7 @@ Private Type JustMyUDT
 End Type
 
 #Const x64StackIssues = ((Mac = 0) And Win64 And (TWINBASIC = 0))
+#Const JapanYen = "\" > "}"
 
 Private Const invalidCallErr As Long = 5
 Private Const unsupportedKeyErr As Long = invalidCallErr
@@ -46,7 +47,7 @@ Public Sub RunAllDictionaryTests()
     TestDictionarySelf
     TestDictionaryStackFixes
     TestDictionaryTryGetItem
-    Debug.Print "Finished running tests at " & Now()
+    Debug.Print "Finished running dictionary tests at " & Now()
 End Sub
 
 Private Sub TestEmptyDictionary()
@@ -213,7 +214,11 @@ Private Sub TestDictionaryDealloc()
     ReDim d(1 To n) As Dictionary
     '
     For i = 1 To n
+#If JapanYen Then
+        If i = Fix(n / 2) Then Set Dictionary = d(Fix(n / 4))
+#Else
         If i = n \ 2 Then Set Dictionary = d(n \ 4)
+#End If
         Set d(i) = New Dictionary
         If i Mod 7 = 0 Then Set d(i) = New Dictionary
     Next i
@@ -771,7 +776,7 @@ Private Sub TestDictionaryKeys()
     d.Add Empty, Null
     d.Add Null, Empty
     d.Add CVErr(2042), 312
-    Debug.Assert ArrayToCSV(d.Keys) = "[1,2,3,4,5,""coll"",111,Empty,Null,Error 2042]"
+    Debug.Assert ArrayToCSV(d.Keys) = "[1,2,3,4,5,""coll"",111,Empty,Null," & CStr(CVErr(2042)) & "]"
     '
     For i = 1 To 3
         d.Remove i
@@ -1101,7 +1106,9 @@ Private Sub TestDictionaryRemove()
     '
     d.Remove CVErr(3)
     Debug.Assert ArrayToCSV(d.Items) = "[1,2,4,5,Null]"
-    Debug.Assert ArrayToCSV(d.Keys) = "[Error 1,Error 2,Error 4,Error 5,Empty]"
+    Debug.Assert ArrayToCSV(d.Keys) = "[" & Join(Array(CStr(CVErr(1)), CStr(CVErr(2)) _
+                                                     , CStr(CVErr(4)), CStr(CVErr(5)) _
+                                                     , "Empty"), ",") & "]"
     Debug.Assert d.Count = 5
     '
     d.Key(Empty) = CVErr(3)
