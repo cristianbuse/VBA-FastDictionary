@@ -840,6 +840,8 @@ Compared to a Scripting.Dictionary, this Dictionary has a few extra methods that
 - ```PredictCount``` - if the number of Key-Item pairs is known upfront or if a good guess is possible, then a call to ```PredictCount``` with the expected number of pairs will prepare the internal size of the hash map so that there are no calls made to ```Rehash```. This results in better performance
 - ```Self``` - this method is useful in ```With New Dictionary``` code blocks
 - ```TryGetItem``` - returns a ```Boolean``` indicating if the given input Key exists while also returning the corresponding Item by reference. It does not throw an error
+- ```IsDuplicate``` - if ```AllowDuplicateKeys``` is ```True``` then this function checks if a specific Key appears more than once
+- ```ItemsByKey``` - returns a ```Collection``` with all Items corresponding to a specific Key. Can return multiple Items only if ```AllowDuplicateKeys``` is ```True```
 
 Moreover, an ```Optional``` parameter called ```IgnoreErrors``` was added to existing methods. This allows the user to call the following methods without triggering an error, all while maintaining compatibility with previous versions:
 - ```Add``` -  allows calls like: ```If dict.Add(Key, Item, IgnoreErrors:=True) Then```. This has no speed impact compared to calling ```Add``` without the additional argument, while it is 70% faster than a call like ```If Not dict.Exists(...) Then dict.Add...```
