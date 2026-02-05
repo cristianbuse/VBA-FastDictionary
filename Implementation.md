@@ -67,13 +67,13 @@ Users can still achieve compatibility with ```Scripting.Dictionary``` via ```Str
 This will remain in effect even if a new version of the class is imported
 
 Note the following about ```StrictScriptingMode```:
-- if is off / ```False``` by default. This is because the original ```Scripting.Dictionary``` behaviour is misleading
+- is off / ```False``` by default. This is because the original ```Scripting.Dictionary``` behaviour is misleading
 - cannot be changed at runtime. The available ```Property``` with the same name is ```Get```-only
 - solves only the following 3 out of 5 differences mentioned above:
   - Error numbers incompatibility
   - Item (Get) incompatibility
   - Return type for ```Items``` and ```Keys```
-- it does not solve the remaining 2 differences:
+- does not solve the remaining 2 differences:
   - Hashing Numbers incompatibility. Because ```Scripting.Dictionary``` hashes numbers outside the -9,999,999 to 9,999,999 range to a value of 0, and it would make no sense to carry this limitation forward even in compatibility mode. See more below
   - Zero-length text, 0 (zero) and Empty incompatibility. Because ```Scripting.Dictionary``` does not allow all 3 at the same time and it depends on the order being added. This is a 'bug' and should not be relied upon even in compatibility mode
 
@@ -164,7 +164,7 @@ When calling the ```Item``` (Get) property with a key that does not exist, the `
 So, by default, this Dictionary throws error 9 if ```Item``` (Get) is called with a key that is not part of the dictionary.
 
 However, there are 2 ways to replicate the ```Scripting.Dictionary``` behaviour:
-1. Turn ```[StrictScriptingMode](#strictscriptingmode)``` to on / ```True``` using the precompile options mentioned above
+1. Turn [StrictScriptingMode](#strictscriptingmode) to on / ```True``` using the precompile options mentioned above
 2. Turn ```CreateEmptyItemIfMissingKey``` to ```True``` at runtime, anytime, regardless if the Dictionary instance already has items or not
 
 Moreover, the new ```TryGetItem``` method complements ```Item``` (Get) if the user wants an error-free approach.
