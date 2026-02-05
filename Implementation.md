@@ -75,7 +75,7 @@ Note the following about ```StrictScriptingMode```:
   - Return type for ```Items``` and ```Keys```
 - does not solve the remaining 2 differences:
   - Hashing Numbers incompatibility. Because ```Scripting.Dictionary``` hashes numbers outside the -9,999,999 to 9,999,999 range to a value of 0, and it would make no sense to carry this limitation forward even in compatibility mode. See more below
-  - Zero-length text, 0 (zero) and Empty incompatibility. Because ```Scripting.Dictionary``` does not allow all 3 at the same time and it depends on the order being added. This is a 'bug' and should not be relied upon even in compatibility mode
+  - Zero-length text, 0 (zero) and Empty incompatibility. Because ```Scripting.Dictionary``` does not allow all 3 at the same time and it depends on the order being added. This is a 'bug' and should not be relied upon, even in compatibility mode
 
 For more details please visit [discussion 28](https://github.com/cristianbuse/VBA-FastDictionary/discussions/28).
 
@@ -113,7 +113,7 @@ Sub TestNumberHash()
 End Sub
 ```
 
-Thus, any number outside the ```Single``` range is not hashed. The following all return 0 (zero):
+Thus, any number outside the ```Single``` range is hashed to 0 (zero):
 ```VBA
 Dim d As Object: Set d = CreateObject("Scripting.Dictionary")
 Debug.Print d.HashVal(10000000)
@@ -228,7 +228,7 @@ By default, this Dictionary returns ```Variant()``` for both, for the following 
 - The user can still wrap the result in a ```Variant``` if they want to
 - Passing a ```Variant``` to a method expecting ```Variant()``` is not allowed, while passing ```Variant()``` to ```Variant``` is allowed
 - Both dictionaries always return an array of Variant(s) regardless of the items or keys. So, for clarity, best to be explicit with ```Variant()```
-- Assigining the result of a function returning ```Variant/Variant()``` to a variable of type ```Variant()``` makes a copy of the array while the reverse does not
+- Assigning the result of a function returning ```Variant/Variant()``` to a variable of type ```Variant()``` makes a copy of the array while the reverse does not
 
 To test the last point above, run ```TestAssumptions``` below from a standard .bas module:
 ```VBA
