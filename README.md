@@ -1,5 +1,5 @@
 # VBA-FastDictionary [![Mentioned in Awesome VBA](https://awesome.re/mentioned-badge.svg)](https://github.com/sancarn/awesome-vba)
-Fast Native Dictionary for VBA. Compatible with Windows and Mac. Does not require any DLL references or any kind of external libraries.
+Fast Native Dictionary for VBA. Compatible with Windows and Mac. Does not require DLL references or any external libraries.
 
 This Dictionary is intended for VBA. However, it is Compatible with VBA7 / [twinBASIC](https://twinbasic.com/) / VB6 / VBA6.
 
@@ -18,7 +18,7 @@ Although the ```OLE Automation``` project reference should be enabled by default
 - Easy replacement for Scripting.Dictionary
 - Quite fast for a native VBA Dictionary 
 - Mac compatible
-- Overcomes VB Class Deallocation design and has linear deallocation speed. See [Fast Deallocation](https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#fast-deallocation)
+- Overcomes limitations in the VB Class deallocation design and achieves linear deallocation speed. See [Fast Deallocation](https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#fast-deallocation)
 - Overcomes VB x64 Compiler Issues. See [x64 Assembly fixes](https://github.com/cristianbuse/VBA-FastDictionary/blob/master/Implementation.md#x64-assembly)
 - Automatic Rehashing and Resizing
 - Supports ```For Each```
