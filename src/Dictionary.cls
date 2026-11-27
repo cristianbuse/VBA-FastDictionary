@@ -749,11 +749,16 @@ Private Sub GetIndex(ByRef Key As Variant _
     If Var.Hash.GroupCount = 0 Then Init
     Dim vt As VbVarType
     Dim i As Long
+    Dim startSlot As Long
     '
-    If Var.LastHash.isSet Then GoTo FindNext
+    If IsObject(Key) Then vt = vbObject Else vt = VarType(Key)
+    If Var.LastHash.isSet Then
+        If vt = vbDataObject Then vt = vbObject
+        startSlot = hVal Mod Var.Hash.GroupCount
+        GoTo FindNext
+    End If
     '
     'Hash value
-    If IsObject(Key) Then vt = vbObject Else vt = VarType(Key)
     If vt = vbString Then
         Const tPrime As Long = 131&
         Const tOverflowMask As Long = &H7FFFFF
@@ -888,7 +893,6 @@ Private Sub GetIndex(ByRef Key As Variant _
         outIndex = notFound
         Exit Sub
     End If
-FindNext:
     '
     #If x64 Then
         Const signBit As LongLong = &H8000000000000000^
@@ -904,10 +908,14 @@ FindNext:
         Const positionPrime As Long = 7
     #End If
     Dim cMask As LongPtr
-    Dim startSlot As Long: startSlot = groupSlot
+    '
+    startSlot = groupSlot
+FindNext:
     Do
         With Var.Hash.Groups(groupSlot)
-            If Not Var.LastHash.isSet Then
+            If Var.LastHash.isSet Then
+                Var.LastHash.isSet = False
+            Else
                 cMask = Mem.Look(0).CountMask(.Count)
                 'Match bytes adapted from:
                 'https://graphics.stanford.edu/~seander/bithacks.html#ZeroInWord
@@ -1034,7 +1042,7 @@ Private Function CountRemoved(ByVal upTo As Long) As Long
     '
     If isSecondHalf Then
         startIndex = upTo + 1
-        endIndex = Var.Count
+        endIndex = Var.Count - 1
     Else
         endIndex = upTo - 1
     End If
@@ -2542,7 +2550,7 @@ Public Function ItemsByKey(ByRef Key As Variant) As Collection
                            , _
                            , Var.LastHash.matches _
                            , IgnoreErrors:=True
-            If i = notFound Then Exit Do
+            If i <= notFound Then Exit Do
             coll.Add Var.Items(i)
             Var.LastHash.isSet = True
         Loop
