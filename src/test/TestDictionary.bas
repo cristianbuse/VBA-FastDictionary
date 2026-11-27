@@ -33,9 +33,11 @@ Public Sub RunAllDictionaryTests()
     TestDictionaryFactory
     TestDictionaryHashVal
     TestDictionaryIndex
+    TestDictionaryIsDuplicate
     TestDictionaryItem
     TestDictionaryItemAtIndex
     TestDictionaryItems
+    TestDictionaryItemsByKey
     TestDictionaryKey
     TestDictionaryKeyAtIndex
     TestDictionaryKeys
@@ -416,6 +418,16 @@ Private Sub TestDictionaryIndex()
     On Error GoTo 0
     '
     Debug.Assert d.Index(15000, True) = -1
+    '
+    d.RemoveAll
+    '
+    For i = 1 To 64
+        d.Add i, i
+    Next i
+    d.Remove 1
+    For i = 2 To 63
+        Debug.Assert d.Index(i) = i - 2
+    Next i
 End Sub
 
 Private Sub TestDictionaryItem()
@@ -1344,4 +1356,49 @@ Private Sub TestDictionaryTryGetItem()
     d.Add "key", 1
     Debug.Assert d.TryGetItem("key", v)
     Debug.Assert v = 1
+End Sub
+
+Private Sub TestDictionaryItemsByKey()
+    Dim d As New Dictionary
+    Dim i As Long
+    '
+    d.AllowDuplicateKeys = True
+    For i = 1 To 5
+        d.Add "dup", i
+    Next i
+    Debug.Assert d.ItemsByKey("dup").Count = 5
+    '
+    For i = 6 To 9
+        d.Add "dup", i
+    Next i
+    Debug.Assert d.ItemsByKey("dup").Count = 9
+    '
+    d.RemoveAll
+    d.CompareMode = vbTextCompare
+    d.Add "abc", 1
+    d.Add "ABC", 2
+    '
+    Debug.Assert d.ItemsByKey("abc").Count = 2
+    Debug.Assert d.ItemsByKey(Array()).Count = 0
+End Sub
+
+Private Sub TestDictionaryIsDuplicate()
+    Dim d As New Dictionary
+    Dim c As New Collection
+    '
+    d.AllowDuplicateKeys = True
+    d.Add c, 1
+    d.Add c, 2
+    '
+    On Error Resume Next
+    Debug.Assert d.IsDuplicate(c)
+    Debug.Assert Err.Number = 0
+    On Error GoTo 0
+    '
+    d.RemoveAll
+    d.CompareMode = vbTextCompare
+    '
+    d.Add "abc", 1
+    d.Add "ABC", 2
+    Debug.Assert d.IsDuplicate("abc")
 End Sub
